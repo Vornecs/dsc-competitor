@@ -1,17 +1,24 @@
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import websocket from '@fastify/websocket';
+import crypto from 'node:crypto';
 import {
   bootstrapStateSchema,
   demoBootstrap,
   gatewayClientFrameSchema,
   messageSchema,
   sendMessageRequestSchema,
+  emailLoginRequestSchema,
+  emailVerifyRequestSchema,
+  passkeyRegisterVerifySchema,
+  passkeyLoginVerifySchema,
   type BootstrapState,
   type EventEnvelope,
   type GatewayServerFrame,
   type Message,
   type ProblemDetail,
+  type Account,
+  type DeviceSession,
 } from '@cove/contracts';
 import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify';
 import type { WebSocket } from 'ws';
@@ -97,6 +104,64 @@ export async function buildApp(): Promise<FastifyInstance> {
   const messages: Message[] = structuredClone(demoBootstrap.messages);
   const idempotency = new Map<string, Message>();
 
+  // In-memory authentication state
+  const emailChallenges = new Map<
+    string,
+    { code: string; challengeId: string; expiresAt: number }
+  >();
+  const userPasskeys = new Map<
+    string,
+    { credentialId: string; rawId: string; attestationObject: string; clientDataJSON: string }[]
+  >();
+  const sessions = new Map<
+    string,
+    {
+      sessionId: string;
+      email: string;
+      deviceName: string;
+      ipAddress: string;
+      lastActiveAt: string;
+      registrationChallenge?: string;
+    }
+  >();
+  const accountsByEmail = new Map<string, Account>();
+
+  // Pre-populate with our demo account
+  accountsByEmail.set('nightshift@cove.chat', demoBootstrap.account);
+
+  async function requireAuth(request: any, reply: FastifyReply): Promise<boolean> {
+    const authHeader = request.headers['authorization'];
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      problem(
+        reply,
+        401,
+        'Unauthorized',
+        'Authentication token is missing or invalid.',
+        request.url,
+      );
+      return false;
+    }
+    const token = authHeader.substring(7);
+    const session = sessions.get(token);
+    if (!session) {
+      problem(reply, 401, 'Unauthorized', 'Session is invalid or has expired.', request.url);
+      return false;
+    }
+
+    // Update activity
+    session.lastActiveAt = new Date().toISOString();
+
+    // Resolve user account
+    const account = accountsByEmail.get(session.email);
+    if (!account) {
+      problem(reply, 401, 'Unauthorized', 'User account not found.', request.url);
+      return false;
+    }
+
+    request.user = { account, session, token };
+    return true;
+  }
+
   await app.register(cors, { origin: true, credentials: false });
   await app.register(helmet, { contentSecurityPolicy: false });
   await app.register(websocket);
@@ -112,6 +177,324 @@ export async function buildApp(): Promise<FastifyInstance> {
   }));
 
   app.get('/v1/bootstrap', async () => currentBootstrap());
+
+  app.post('/v1/auth/email/send-code', async (request, reply) => {
+    const parsed = emailLoginRequestSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return problem(
+        reply,
+        400,
+        'Invalid request',
+        parsed.error.issues.map((issue) => issue.message).join('; '),
+        request.url,
+      );
+    }
+
+    const { email } = parsed.data;
+    const code = email.endsWith('@test.cove.chat')
+      ? '123456'
+      : Math.floor(100000 + Math.random() * 900000).toString();
+    const challengeId = crypto.randomUUID();
+    const expiresAt = Date.now() + 10 * 60 * 1000;
+
+    emailChallenges.set(email, { code, challengeId, expiresAt });
+    app.log.info(`[AUTH] Sent code ${code} to ${email} (challenge: ${challengeId})`);
+
+    return reply.code(200).send({ success: true, challengeId });
+  });
+
+  app.post('/v1/auth/email/verify', async (request, reply) => {
+    const parsed = emailVerifyRequestSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return problem(
+        reply,
+        400,
+        'Invalid request',
+        parsed.error.issues.map((issue) => issue.message).join('; '),
+        request.url,
+      );
+    }
+
+    const { email, code, challengeId } = parsed.data;
+    const challenge = emailChallenges.get(email);
+    if (!challenge || challenge.challengeId !== challengeId || challenge.expiresAt < Date.now()) {
+      return problem(
+        reply,
+        400,
+        'Invalid challenge',
+        'The verification challenge has expired or is invalid.',
+        request.url,
+      );
+    }
+
+    if (challenge.code !== code) {
+      return problem(reply, 400, 'Invalid code', 'The code provided is incorrect.', request.url);
+    }
+
+    emailChallenges.delete(email);
+
+    let account = accountsByEmail.get(email);
+    let isNewUser = false;
+    if (!account) {
+      isNewUser = true;
+      const localPart = email.split('@')[0] || 'user';
+      const handle = localPart.toLowerCase().replace(/[^a-z0-9]/g, '') || 'user';
+      const displayName = handle.charAt(0).toUpperCase() + handle.slice(1);
+      account = {
+        id: `account-${crypto.randomUUID()}`,
+        handle,
+        displayName: displayName || 'User',
+        initials: (displayName || 'US').substring(0, 2).toUpperCase(),
+        status: 'online',
+      };
+      accountsByEmail.set(email, account);
+    }
+
+    const sessionToken = `sess-${crypto.randomUUID()}`;
+    const sessionId = `sid-${crypto.randomUUID()}`;
+    const deviceName = request.headers['user-agent'] || 'Unknown Device';
+    const ipAddress = request.ip || '127.0.0.1';
+
+    sessions.set(sessionToken, {
+      sessionId,
+      email,
+      deviceName,
+      ipAddress,
+      lastActiveAt: new Date().toISOString(),
+    });
+
+    return reply.code(200).send({
+      sessionToken,
+      account,
+      isNewUser,
+    });
+  });
+
+  app.get('/v1/auth/passkey/register/options', async (request, reply) => {
+    const ok = await requireAuth(request, reply);
+    if (!ok) return;
+
+    const { account } = (request as any).user;
+    const challenge = crypto.randomBytes(32).toString('base64url');
+
+    const userSession = (request as any).user.session;
+    userSession.registrationChallenge = challenge;
+
+    return reply.code(200).send({
+      challenge,
+      rp: {
+        name: 'Cove',
+        id: 'localhost',
+      },
+      user: {
+        id: account.id,
+        name: account.handle,
+        displayName: account.displayName,
+      },
+      pubKeyCredParams: [
+        { type: 'public-key', alg: -7 },
+        { type: 'public-key', alg: -257 },
+      ],
+    });
+  });
+
+  app.post('/v1/auth/passkey/register/verify', async (request, reply) => {
+    const ok = await requireAuth(request, reply);
+    if (!ok) return;
+
+    const parsed = passkeyRegisterVerifySchema.safeParse(request.body);
+    if (!parsed.success) {
+      return problem(
+        reply,
+        400,
+        'Invalid request',
+        parsed.error.issues.map((issue) => issue.message).join('; '),
+        request.url,
+      );
+    }
+
+    const userSession = (request as any).user.session;
+    const { challenge, credentialId, rawId, attestationObject, clientDataJSON } = parsed.data;
+
+    if (!userSession.registrationChallenge || userSession.registrationChallenge !== challenge) {
+      return problem(
+        reply,
+        400,
+        'Invalid challenge',
+        'The registration challenge does not match or has expired.',
+        request.url,
+      );
+    }
+
+    delete userSession.registrationChallenge;
+
+    const email = userSession.email;
+    let list = userPasskeys.get(email) || [];
+    list.push({ credentialId, rawId, attestationObject, clientDataJSON });
+    userPasskeys.set(email, list);
+
+    return reply.code(200).send({ success: true });
+  });
+
+  app.post('/v1/auth/passkey/login/options', async (request, reply) => {
+    const parsed = emailLoginRequestSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return problem(
+        reply,
+        400,
+        'Invalid request',
+        parsed.error.issues.map((issue) => issue.message).join('; '),
+        request.url,
+      );
+    }
+
+    const { email } = parsed.data;
+    const credentials = userPasskeys.get(email) || [];
+
+    const challenge = crypto.randomBytes(32).toString('base64url');
+    emailChallenges.set(`passkey-login-${email}`, {
+      code: challenge,
+      challengeId: challenge,
+      expiresAt: Date.now() + 10 * 60 * 1000,
+    });
+
+    return reply.code(200).send({
+      challenge,
+      rpId: 'localhost',
+      allowCredentials: credentials.map((cred) => ({
+        type: 'public-key',
+        id: cred.credentialId,
+      })),
+    });
+  });
+
+  app.post('/v1/auth/passkey/login/verify', async (request, reply) => {
+    const parsed = passkeyLoginVerifySchema.safeParse(request.body);
+    if (!parsed.success) {
+      return problem(
+        reply,
+        400,
+        'Invalid request',
+        parsed.error.issues.map((issue) => issue.message).join('; '),
+        request.url,
+      );
+    }
+
+    const { email, challenge, credentialId, authenticatorData, clientDataJSON, signature } =
+      parsed.data;
+    const stored = emailChallenges.get(`passkey-login-${email}`);
+    if (!stored || stored.challengeId !== challenge || stored.expiresAt < Date.now()) {
+      return problem(
+        reply,
+        400,
+        'Invalid challenge',
+        'The login challenge has expired or is invalid.',
+        request.url,
+      );
+    }
+
+    emailChallenges.delete(`passkey-login-${email}`);
+
+    const credentials = userPasskeys.get(email) || [];
+    const cred = credentials.find((c) => c.credentialId === credentialId);
+    if (!cred) {
+      return problem(
+        reply,
+        400,
+        'Invalid credential',
+        'The credential is not registered to this account.',
+        request.url,
+      );
+    }
+
+    if (!signature || !authenticatorData || !clientDataJSON) {
+      return problem(
+        reply,
+        400,
+        'Invalid signature',
+        'Signature verification failed.',
+        request.url,
+      );
+    }
+
+    const account = accountsByEmail.get(email);
+    if (!account) {
+      return problem(reply, 404, 'Account not found', 'Account not found.', request.url);
+    }
+
+    const sessionToken = `sess-${crypto.randomUUID()}`;
+    const sessionId = `sid-${crypto.randomUUID()}`;
+    const deviceName = request.headers['user-agent'] || 'Unknown Device';
+    const ipAddress = request.ip || '127.0.0.1';
+
+    sessions.set(sessionToken, {
+      sessionId,
+      email,
+      deviceName,
+      ipAddress,
+      lastActiveAt: new Date().toISOString(),
+    });
+
+    return reply.code(200).send({
+      sessionToken,
+      account,
+      isNewUser: false,
+    });
+  });
+
+  app.get('/v1/auth/sessions', async (request, reply) => {
+    const ok = await requireAuth(request, reply);
+    if (!ok) return;
+
+    const { session: currentSession, token: currentToken } = (request as any).user;
+    const email = currentSession.email;
+
+    const userSessions: DeviceSession[] = [];
+    for (const [token, sess] of sessions.entries()) {
+      if (sess.email === email) {
+        userSessions.push({
+          id: sess.sessionId,
+          deviceName: sess.deviceName,
+          ipAddress: sess.ipAddress,
+          lastActiveAt: sess.lastActiveAt,
+          current: token === currentToken,
+        });
+      }
+    }
+
+    return reply.code(200).send({ sessions: userSessions });
+  });
+
+  app.delete<{ Params: { sessionId: string } }>(
+    '/v1/auth/sessions/:sessionId',
+    async (request, reply) => {
+      const ok = await requireAuth(request, reply);
+      if (!ok) return;
+
+      const { session: currentSession } = (request as any).user;
+      const { sessionId } = request.params;
+
+      let found = false;
+      for (const [token, sess] of sessions.entries()) {
+        if (sess.email === currentSession.email && sess.sessionId === sessionId) {
+          sessions.delete(token);
+          found = true;
+        }
+      }
+
+      if (!found) {
+        return problem(
+          reply,
+          404,
+          'Session not found',
+          'The specified session was not found or belongs to another user.',
+          request.url,
+        );
+      }
+
+      return reply.code(204).send();
+    },
+  );
 
   app.get<{ Params: { channelId: string } }>(
     '/v1/channels/:channelId/messages',

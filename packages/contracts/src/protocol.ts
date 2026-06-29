@@ -160,6 +160,99 @@ export const gatewayClientFrameSchema = z.discriminatedUnion('op', [
 ]);
 export type GatewayClientFrame = z.infer<typeof gatewayClientFrameSchema>;
 
+export const emailLoginRequestSchema = z.object({
+  email: z.string().email(),
+});
+export type EmailLoginRequest = z.infer<typeof emailLoginRequestSchema>;
+
+export const emailLoginResponseSchema = z.object({
+  success: z.boolean(),
+  challengeId: z.string().min(1),
+});
+export type EmailLoginResponse = z.infer<typeof emailLoginResponseSchema>;
+
+export const emailVerifyRequestSchema = z.object({
+  email: z.string().email(),
+  code: z.string().length(6),
+  challengeId: z.string().min(1),
+});
+export type EmailVerifyRequest = z.infer<typeof emailVerifyRequestSchema>;
+
+export const authResponseSchema = z.object({
+  sessionToken: z.string().min(1),
+  account: accountSchema,
+  isNewUser: z.boolean(),
+});
+export type AuthResponse = z.infer<typeof authResponseSchema>;
+
+export const passkeyRegisterOptionsResponseSchema = z.object({
+  challenge: z.string().min(1),
+  rp: z.object({
+    name: z.string(),
+    id: z.string(),
+  }),
+  user: z.object({
+    id: z.string(),
+    name: z.string(),
+    displayName: z.string(),
+  }),
+  pubKeyCredParams: z.array(
+    z.object({
+      type: z.literal('public-key'),
+      alg: z.number().int(),
+    }),
+  ),
+});
+export type PasskeyRegisterOptionsResponse = z.infer<typeof passkeyRegisterOptionsResponseSchema>;
+
+export const passkeyRegisterVerifySchema = z.object({
+  challenge: z.string().min(1),
+  credentialId: z.string().min(1),
+  rawId: z.string().min(1),
+  attestationObject: z.string().min(1),
+  clientDataJSON: z.string().min(1),
+});
+export type PasskeyRegisterVerify = z.infer<typeof passkeyRegisterVerifySchema>;
+
+export const passkeyLoginOptionsResponseSchema = z.object({
+  challenge: z.string().min(1),
+  rpId: z.string(),
+  allowCredentials: z
+    .array(
+      z.object({
+        type: z.literal('public-key'),
+        id: z.string(),
+      }),
+    )
+    .optional(),
+});
+export type PasskeyLoginOptionsResponse = z.infer<typeof passkeyLoginOptionsResponseSchema>;
+
+export const passkeyLoginVerifySchema = z.object({
+  email: z.string().email(),
+  challenge: z.string().min(1),
+  credentialId: z.string().min(1),
+  authenticatorData: z.string().min(1),
+  clientDataJSON: z.string().min(1),
+  signature: z.string().min(1),
+  userHandle: z.string().optional(),
+});
+export type PasskeyLoginVerify = z.infer<typeof passkeyLoginVerifySchema>;
+
+export const deviceSessionSchema = z.object({
+  id: z.string().min(1),
+  deviceName: z.string().min(1),
+  ipAddress: z.string(),
+  lastActiveAt: z.string().datetime(),
+  current: z.boolean(),
+});
+export type DeviceSession = z.infer<typeof deviceSessionSchema>;
+
+export const deviceSessionsListSchema = z.object({
+  sessions: z.array(deviceSessionSchema),
+});
+export type DeviceSessionsList = z.infer<typeof deviceSessionsListSchema>;
+
 export interface ProblemDetail {
   type: string;
   title: string;

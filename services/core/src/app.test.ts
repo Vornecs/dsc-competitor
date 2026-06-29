@@ -79,3 +79,119 @@ describe('realtime gateway', () => {
     expect(frames.map((frame) => (frame as { op: string }).op)).toEqual(['READY', 'HEARTBEAT_ACK']);
   });
 });
+
+describe('authentication API', () => {
+  it('performs email login flow and manages device sessions', async () => {
+    const app = await buildApp();
+    apps.push(app);
+
+    const email = 'alex@test.cove.chat';
+    const requestResponse = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/email/send-code',
+      payload: { email },
+    });
+    expect(requestResponse.statusCode).toBe(200);
+    const { success, challengeId } = requestResponse.json();
+    expect(success).toBe(true);
+    expect(challengeId).toBeDefined();
+
+    const verifyFail = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/email/verify',
+      payload: { email, code: '000000', challengeId },
+    });
+    expect(verifyFail.statusCode).toBe(400);
+
+    const verifySuccess = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/email/verify',
+      payload: { email, code: '123456', challengeId },
+    });
+    expect(verifySuccess.statusCode).toBe(200);
+    const authData = verifySuccess.json();
+    expect(authData.sessionToken).toBeDefined();
+    expect(authData.account.handle).toBe('alex');
+    expect(authData.isNewUser).toBe(true);
+
+    const token = authData.sessionToken;
+
+    const sessionsList = await app.inject({
+      method: 'GET',
+      url: '/v1/auth/sessions',
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(sessionsList.statusCode).toBe(200);
+    const { sessions } = sessionsList.json();
+    expect(sessions.length).toBe(1);
+    expect(sessions[0].current).toBe(true);
+
+    const sessionId = sessions[0].id;
+
+    const regOptions = await app.inject({
+      method: 'GET',
+      url: '/v1/auth/passkey/register/options',
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(regOptions.statusCode).toBe(200);
+    const { challenge: regChallenge } = regOptions.json();
+    expect(regChallenge).toBeDefined();
+
+    const regVerify = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/passkey/register/verify',
+      headers: { authorization: `Bearer ${token}` },
+      payload: {
+        challenge: regChallenge,
+        credentialId: 'cred-123',
+        rawId: 'cred-123',
+        attestationObject: 'mock-attestation',
+        clientDataJSON: 'mock-client-data',
+      },
+    });
+    expect(regVerify.statusCode).toBe(200);
+    expect(regVerify.json()).toEqual({ success: true });
+
+    const loginOptions = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/passkey/login/options',
+      payload: { email },
+    });
+    expect(loginOptions.statusCode).toBe(200);
+    const { challenge: loginChallenge, allowCredentials } = loginOptions.json();
+    expect(loginChallenge).toBeDefined();
+    expect(allowCredentials).toEqual([{ type: 'public-key', id: 'cred-123' }]);
+
+    const loginVerify = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/passkey/login/verify',
+      payload: {
+        email,
+        challenge: loginChallenge,
+        credentialId: 'cred-123',
+        authenticatorData: 'mock-auth-data',
+        clientDataJSON: 'mock-client-data',
+        signature: 'mock-sig',
+      },
+    });
+    expect(loginVerify.statusCode).toBe(200);
+    const loginAuth = loginVerify.json();
+    expect(loginAuth.sessionToken).toBeDefined();
+    expect(loginAuth.account.id).toBe(authData.account.id);
+    expect(loginAuth.isNewUser).toBe(false);
+
+    const revokeResponse = await app.inject({
+      method: 'DELETE',
+      url: `/v1/auth/sessions/${sessionId}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(revokeResponse.statusCode).toBe(204);
+
+    const sessionsListAfter = await app.inject({
+      method: 'GET',
+      url: '/v1/auth/sessions',
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(sessionsListAfter.statusCode).toBe(401);
+  });
+});
