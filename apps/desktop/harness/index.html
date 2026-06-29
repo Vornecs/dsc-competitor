@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src blob:; connect-src 'none'"
+    />
+    <title>Competitor desktop capability gate</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main>
+      <header class="hero">
+        <div>
+          <span class="eyebrow">Phase 0 · Windows evidence harness</span>
+          <h1>Desktop capability gate</h1>
+          <p>
+            Measure capture, system audio, device changes, shortcuts, startup, and resource use.
+          </p>
+        </div>
+        <span id="runtime" class="runtime">Loading runtime…</span>
+      </header>
+
+      <section class="warning">
+        <strong>Evidence, not a demo.</strong>
+        A shell is eligible only after every gate passes on supported Windows 10 and 11 hardware.
+        Electron’s built-in shortcut probe does not prove hold-to-talk because it has no release
+        event.
+      </section>
+
+      <div class="grid">
+        <section class="card capture-card">
+          <header>
+            <span>01</span>
+            <div>
+              <h2>Display capture</h2>
+              <p>Screen/window video plus Windows loopback audio.</p>
+            </div>
+          </header>
+          <div class="row">
+            <select id="capture-source" aria-label="Capture source">
+              <option>Load sources first</option>
+            </select>
+            <button id="load-sources" type="button">Load sources</button>
+            <button id="start-capture" class="primary" type="button" disabled>Start capture</button>
+          </div>
+          <video id="capture-preview" autoplay muted playsinline></video>
+          <pre id="capture-result">No capture measurement.</pre>
+        </section>
+
+        <section class="card">
+          <header>
+            <span>02</span>
+            <div>
+              <h2>Audio devices</h2>
+              <p>Enumerate devices and observe hot-plug without restarting.</p>
+            </div>
+          </header>
+          <div class="row">
+            <button id="request-audio" class="primary" type="button">Request microphone</button>
+          </div>
+          <pre id="device-result">No device measurement.</pre>
+        </section>
+
+        <section class="card">
+          <header>
+            <span>03</span>
+            <div>
+              <h2>Unfocused shortcut</h2>
+              <p>Registration probe only; a native press/release hook remains required for PTT.</p>
+            </div>
+          </header>
+          <div class="row">
+            <input id="shortcut" value="F8" aria-label="Shortcut accelerator" />
+            <button id="register-shortcut" class="primary" type="button">Register</button>
+          </div>
+          <pre id="shortcut-result">No shortcut measurement.</pre>
+        </section>
+
+        <section class="card">
+          <header>
+            <span>04</span>
+            <div>
+              <h2>Process sample</h2>
+              <p>Snapshot process memory and CPU before a timed soak.</p>
+            </div>
+          </header>
+          <div class="row">
+            <button id="sample-process" class="primary" type="button">Take sample</button>
+          </div>
+          <pre id="process-result">No process measurement.</pre>
+        </section>
+      </div>
+
+      <section class="card report-card">
+        <header>
+          <span>05</span>
+          <div>
+            <h2>Evidence record</h2>
+            <p>Copy this record into the candidate evidence file with manual observations.</p>
+          </div>
+        </header>
+        <div class="row">
+          <button id="copy-report" type="button">Copy JSON</button><span id="copy-status"></span>
+        </div>
+        <textarea id="report" readonly aria-label="Evidence JSON"></textarea>
+      </section>
+    </main>
+    <script type="module" src="/src.ts"></script>
+  </body>
+</html>

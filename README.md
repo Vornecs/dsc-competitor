@@ -7,6 +7,7 @@ The product and delivery source of truth is [PRODUCT_PLAN.md](./PRODUCT_PLAN.md)
 ## Workspace
 
 - `apps/web` — React/Vite web client.
+- `apps/desktop` — Electron/Tauri decision gate and Windows media evidence harness.
 - `services/core` — Fastify HTTP API and realtime gateway.
 - `packages/contracts` — shared runtime schemas, protocol types, and permission engine.
 - `packages/ui` — shared accessible UI primitives.
@@ -30,6 +31,18 @@ npm run preview -w @competitor/core
 ```
 
 Then open `http://127.0.0.1:8790`.
+
+## Windows desktop capability gate
+
+The shell choice remains open. Run the Electron control candidate to measure display capture, system audio, device hot-plug, shortcuts, startup, and resource use:
+
+```powershell
+npm run preflight -w @competitor/desktop
+npm run smoke -w @competitor/desktop
+npm run harness -w @competitor/desktop
+```
+
+The automated commands do not grant media permissions. The interactive harness requires explicit source/device choices and explains which observations are partial. See [the gate specification](./docs/architecture/DESKTOP_MEDIA_GATE.md).
 
 ## Verification
 

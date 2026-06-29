@@ -1,10 +1,10 @@
 # Competitor Product Plan
 
-> Last updated: 2026-06-29 | Cycle: 1 | Phase: 0 — Foundation | Build health: verified; browser visual QA blocked
+> Last updated: 2026-06-29 | Cycle: 2 | Phase: 0 — Foundation | Build health: verified; desktop gate implemented, selection open
 >
-> Current objective: Cycle 1 foundation completed; preserve the verified baseline and reset browser QA.
+> Current objective: Cycle 2 delivered a repeatable Windows desktop/media evidence harness and measured the Electron control candidate without overstating partial results.
 >
-> Next gate: complete browser-rendered desktop/narrow-viewport QA, then execute P0-007's Windows desktop/media capability harness.
+> Next gate: complete P0-007's permission-dependent media/soak measurements and native PTT adapter; begin P0-008's cost model while those external gates are unavailable.
 
 This file is the authoritative product, architecture, and delivery record. A behavior or scope change is incomplete until this file is reconciled in the same work cycle.
 
@@ -46,16 +46,18 @@ The fastest, clearest place for friends to hang out—without ads, surveillance,
 
 ## Evidence ledger
 
-| ID    | Finding                                                                                                             | Evidence                                                                                                                                                                                                                              | Confidence  | Product consequence                                                                                 |
-| ----- | ------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- | --------------------------------------------------------------------------------------------------- |
-| E-001 | Persistent themed spaces, autonomy, shared activities, and casual interaction support digital third-place behavior. | [Third-place research](https://arxiv.org/abs/2501.09951)                                                                                                                                                                              | Medium-high | Voice rooms and recognizable community structure are core, not optional.                            |
-| E-002 | Discord reports more than 200M monthly active users and 1.9B monthly PC gaming hours.                               | [Discord usage statement](https://discord.com/press-releases/discord-launches-orbs-globally)                                                                                                                                          | High        | Migration friction and network effects must be treated as product risks.                            |
-| E-003 | Users report UI churn, contrast/accessibility issues, wasted space, and resource regressions.                       | [Discord UI feedback](https://support.discord.com/hc/en-us/community/posts/30942204080279-It-would-appear-that-an-overwhelming-majority-of-users-dislike-2025-Desktop-UI-changes-for-variety-of-reasons-request-way-to-revert-update) | Medium      | Establish density modes, performance budgets, visual regression, and reversible navigation changes. |
-| E-004 | Notification overload causes communities to be muted and forgotten.                                                 | [Notification feedback](https://support.discord.com/hc/en-us/community/posts/4421087955735-New-Notification-Alert-Setting-Alert-only-recently-visited-channels)                                                                       | Medium      | Build an explainable attention center instead of relying on badges.                                 |
-| E-005 | Community operators depend on bots to compensate for incomplete logs and moderation workflows.                      | [Moderation feedback](https://support.discord.com/hc/en-us/community/posts/360048297852-Changes-to-Permissions-and-Audit-Logs)                                                                                                        | Medium      | Cases, evidence, actions, appeals, and audit history are first-party systems.                       |
-| E-006 | Users request portable chat and server history.                                                                     | [Export feedback](https://support.discord.com/hc/en-us/community/posts/360035147072-Export-Entire-Chats/comments/4420180099863)                                                                                                       | Medium      | Account and community exports are release requirements.                                             |
-| E-007 | LiveKit offers managed and self-hosted WebRTC, E2EE, reconnection, and cross-platform SDKs.                         | [LiveKit documentation](https://docs.livekit.io/intro/about/)                                                                                                                                                                         | High        | Use a media-provider adapter around LiveKit instead of building an SFU.                             |
-| E-008 | MLS is standardized for asynchronous group key establishment with forward secrecy and post-compromise security.     | [RFC 9420](https://www.rfc-editor.org/info/rfc9420/)                                                                                                                                                                                  | High        | Use a maintained MLS implementation for sealed messaging after external review.                     |
+| ID    | Finding                                                                                                                                             | Evidence                                                                                                                                                                                                                              | Confidence                         | Product consequence                                                                                                   |
+| ----- | --------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| E-001 | Persistent themed spaces, autonomy, shared activities, and casual interaction support digital third-place behavior.                                 | [Third-place research](https://arxiv.org/abs/2501.09951)                                                                                                                                                                              | Medium-high                        | Voice rooms and recognizable community structure are core, not optional.                                              |
+| E-002 | Discord reports more than 200M monthly active users and 1.9B monthly PC gaming hours.                                                               | [Discord usage statement](https://discord.com/press-releases/discord-launches-orbs-globally)                                                                                                                                          | High                               | Migration friction and network effects must be treated as product risks.                                              |
+| E-003 | Users report UI churn, contrast/accessibility issues, wasted space, and resource regressions.                                                       | [Discord UI feedback](https://support.discord.com/hc/en-us/community/posts/30942204080279-It-would-appear-that-an-overwhelming-majority-of-users-dislike-2025-Desktop-UI-changes-for-variety-of-reasons-request-way-to-revert-update) | Medium                             | Establish density modes, performance budgets, visual regression, and reversible navigation changes.                   |
+| E-004 | Notification overload causes communities to be muted and forgotten.                                                                                 | [Notification feedback](https://support.discord.com/hc/en-us/community/posts/4421087955735-New-Notification-Alert-Setting-Alert-only-recently-visited-channels)                                                                       | Medium                             | Build an explainable attention center instead of relying on badges.                                                   |
+| E-005 | Community operators depend on bots to compensate for incomplete logs and moderation workflows.                                                      | [Moderation feedback](https://support.discord.com/hc/en-us/community/posts/360048297852-Changes-to-Permissions-and-Audit-Logs)                                                                                                        | Medium                             | Cases, evidence, actions, appeals, and audit history are first-party systems.                                         |
+| E-006 | Users request portable chat and server history.                                                                                                     | [Export feedback](https://support.discord.com/hc/en-us/community/posts/360035147072-Export-Entire-Chats/comments/4420180099863)                                                                                                       | Medium                             | Account and community exports are release requirements.                                                               |
+| E-007 | LiveKit offers managed and self-hosted WebRTC, E2EE, reconnection, and cross-platform SDKs.                                                         | [LiveKit documentation](https://docs.livekit.io/intro/about/)                                                                                                                                                                         | High                               | Use a media-provider adapter around LiveKit instead of building an SFU.                                               |
+| E-008 | MLS is standardized for asynchronous group key establishment with forward secrecy and post-compromise security.                                     | [RFC 9420](https://www.rfc-editor.org/info/rfc9420/)                                                                                                                                                                                  | High                               | Use a maintained MLS implementation for sealed messaging after external review.                                       |
+| E-009 | Electron directly supports Windows loopback audio in its display-media handler, but its global shortcut callback does not expose key-release state. | [Electron session](https://www.electronjs.org/docs/latest/api/session#sessetdisplaymediarequesthandlerhandler-opts), [globalShortcut](https://www.electronjs.org/docs/latest/api/global-shortcut)                                     | High                               | Use Electron as the executable capture control candidate; require a native press/release adapter before PTT can pass. |
+| E-010 | Tauri's official global-shortcut plugin exposes pressed/released state, while capture remains dependent on WebView2 or native integration.          | [Tauri global shortcut](https://v2.tauri.app/plugin/global-shortcut/)                                                                                                                                                                 | High for shortcut; low for capture | Keep Tauri in the gate until its Windows capture/system-audio behavior is measured.                                   |
 
 Original research remains required: at least 12 members, 8 hosts/moderators, and 5 usability participants before the Phase 0 exit gate.
 
@@ -73,6 +75,7 @@ Original research remains required: at least 12 members, 8 hosts/moderators, and
 | D-008 | API is versioned REST plus an ordered resumable WebSocket gateway.                                                      | Separates durable commands/state from realtime fanout and permits deterministic recovery.   | Contract tests show the split creates correctness or operability problems.                                                   |
 
 | D-009 | Use port 8790 for the local core and integrated preview. | Headroom already owns port 8787 in the shared workspace environment. | The environment-level port allocation changes. |
+| D-010 | Keep the desktop-shell selection open and implement Electron as the first control candidate. | Electron has first-party Windows capture/loopback APIs and runs with the installed toolchain; Tauri requires missing Rust/Visual Studio prerequisites and still needs a capture adapter. | Tauri completes the same measurements or Electron cannot meet PTT/performance budgets after a native adapter spike. |
 
 ## Architecture and public contracts
 
@@ -116,6 +119,7 @@ Administrator bypass never applies to ownership, billing, security, or private m
 - LiveKit voice/screen-share/E2EE spike.
 - Tauri/Electron Windows capability gate.
 - Managed-versus-sealed threat model and initial cost model.
+- Electron/Tauri desktop gate with dated, reproducible evidence rather than an assumption-based selection.
 
 ### Next — Phase 1, cycles 7–25
 
@@ -136,48 +140,51 @@ Administrator bypass never applies to ownership, billing, security, or private m
 
 - Original participant research requires recruited target users.
 - Managed LiveKit validation requires service credentials.
+- Tauri measurement requires an approved Rust and Visual Studio C++ workstation installation.
+- Permission-dependent screen/audio/device measurements require an interactive Windows harness session.
 - Public beta requires external legal, penetration, and E2EE review.
 - Signed Windows distribution requires code-signing credentials.
 
 ## Work-item registry
 
-| ID     | Status      | Outcome                    | Acceptance criteria                                                                                                         | Verification                                                            |
-| ------ | ----------- | -------------------------- | --------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| P0-001 | verified    | Authoritative living plan  | All required sections exist and current cycle is explicit.                                                                  | Manual structure review completed 2026-06-29.                           |
-| P0-002 | verified    | Monorepo foundation        | Workspaces install; shared typecheck, test, and build commands pass.                                                        | Root test/typecheck/build/format commands pass.                         |
-| P0-003 | verified    | Public-contract package    | Runtime validation covers privacy policies, gateway frames, and bootstrap state.                                            | 4 contract/permission tests and strict types pass.                      |
-| P0-004 | verified    | Core transport spike       | Health/bootstrap routes and gateway READY/heartbeat/event behavior run locally.                                             | 3 API/WebSocket tests and integrated runtime probes pass.               |
-| P0-005 | implemented | Polished application shell | Four-region layout, density/theme controls, privacy card, messaging composition, and responsive behavior render accessibly. | 4 semantic/state UI tests and build pass; browser QA is policy-blocked. |
-| P0-006 | verified    | Research kit               | Interview guide, survey, consent script, and synthesis rubric exist.                                                        | Structure reviewed; participant sessions remain external.               |
-| P0-007 | planned     | Desktop/media gate         | Both shell candidates evaluated against capture/PTT/device/performance criteria.                                            | Recorded Windows measurements.                                          |
+| ID     | Status      | Outcome                    | Acceptance criteria                                                                                                         | Verification                                                                                                               |
+| ------ | ----------- | -------------------------- | --------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| P0-001 | verified    | Authoritative living plan  | All required sections exist and current cycle is explicit.                                                                  | Manual structure review completed 2026-06-29.                                                                              |
+| P0-002 | verified    | Monorepo foundation        | Workspaces install; shared typecheck, test, and build commands pass.                                                        | Root test/typecheck/build/format commands pass.                                                                            |
+| P0-003 | verified    | Public-contract package    | Runtime validation covers privacy policies, gateway frames, and bootstrap state.                                            | 4 contract/permission tests and strict types pass.                                                                         |
+| P0-004 | verified    | Core transport spike       | Health/bootstrap routes and gateway READY/heartbeat/event behavior run locally.                                             | 3 API/WebSocket tests and integrated runtime probes pass.                                                                  |
+| P0-005 | implemented | Polished application shell | Four-region layout, density/theme controls, privacy card, messaging composition, and responsive behavior render accessibly. | 4 semantic/state UI tests and build pass; browser QA is policy-blocked.                                                    |
+| P0-006 | verified    | Research kit               | Interview guide, survey, consent script, and synthesis rubric exist.                                                        | Structure reviewed; participant sessions remain external.                                                                  |
+| P0-007 | implemented | Desktop/media gate         | Both shell candidates evaluated against capture/PTT/device/performance criteria.                                            | Electron harness, 3 gate tests, renderer smoke, and dated preflight evidence pass; full candidate comparison remains open. |
+| P0-008 | planned     | Initial cost model         | Bandwidth, media, storage, support, and abuse-cost assumptions produce sensitivity ranges and beta telemetry requirements.  | Reviewed model with explicit unknowns and pricing deferral criteria.                                                       |
 
 ## Quality dashboard
 
-| Area             | Current          | Gate                                                                                                    |
-| ---------------- | ---------------- | ------------------------------------------------------------------------------------------------------- |
-| Install          | verified         | `npm install` completed and generated a locked workspace graph.                                         |
-| Unit tests       | verified         | 11 tests pass: 4 web, 3 core transport, and 4 contract/permission.                                      |
-| Type safety      | verified         | All four workspaces pass strict TypeScript.                                                             |
-| Production build | verified         | Client output is 85.54 kB gzip JavaScript and 4.20 kB gzip CSS.                                         |
-| API integration  | verified         | Health, bootstrap, mutation, gateway, integrated HTML, and assets pass.                                 |
-| Accessibility    | partial          | Semantic UI tests and accessible modes exist; real-browser review remains blocked.                      |
-| Performance      | unmeasured       | Budgets measured after desktop/media spike.                                                             |
-| Security         | baseline partial | CSP, headers, runtime schemas, redacted logs, threat model, and zero-vulnerability npm audits verified. |
-| Reliability      | local only       | Backup/restore and deployment SLOs begin in Phase 1.                                                    |
-| Cost             | unmeasured       | Alpha cost model before managed-service commitment.                                                     |
+| Area             | Current          | Gate                                                                                                                                           |
+| ---------------- | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| Install          | verified         | `npm install` completed and generated a locked workspace graph.                                                                                |
+| Unit tests       | verified         | 14 tests pass: 4 web, 3 core transport, 4 contract/permission, and 3 desktop-gate tests.                                                       |
+| Type safety      | verified         | All four workspaces pass strict TypeScript.                                                                                                    |
+| Production build | verified         | Client output is 85.54 kB gzip JavaScript and 4.20 kB gzip CSS.                                                                                |
+| API integration  | verified         | Health, bootstrap, mutation, gateway, integrated HTML, and assets pass.                                                                        |
+| Accessibility    | partial          | Semantic UI tests and accessible modes exist; real-browser review remains blocked.                                                             |
+| Performance      | partial          | Electron renderer loaded in 2.392 s once; a 464 MB summed startup working-set snapshot signals risk. Warm/idle p95 and soak remain unmeasured. |
+| Security         | baseline partial | CSP, headers, runtime schemas, redacted logs, threat model, and zero-vulnerability npm audits verified.                                        |
+| Reliability      | local only       | Backup/restore and deployment SLOs begin in Phase 1.                                                                                           |
+| Cost             | unmeasured       | Alpha cost model before managed-service commitment.                                                                                            |
 
 ## Risk register
 
-| Risk                                            | Likelihood  | Impact   | Mitigation / trigger                                                                                   |
-| ----------------------------------------------- | ----------- | -------- | ------------------------------------------------------------------------------------------------------ |
-| Network effects prevent migration               | High        | Critical | Consent-based structure import, expiring bridge, fast invite activation, community templates.          |
-| Scope exceeds solo capacity                     | High        | Critical | One active outcome per cycle, hard phase gates, defer discovery/mobile/federation.                     |
-| Safety operations exceed capacity               | Medium-high | Critical | Invite-only cohorts, 16+, no explicit content, community caps, first-party case tooling.               |
-| Media cost or quality misses target             | Medium      | Critical | LiveKit spike, provider abstraction, participant-minute telemetry, capacity rather than quality tiers. |
-| E2EE creates misleading guarantees              | Medium      | Critical | Explicit modes, metadata disclosure, maintained MLS, independent review before marketing.              |
-| Desktop shell fails capture or resource targets | Medium      | High     | Mechanical Tauri/Electron gate with real Windows testing.                                              |
-| Permission bugs cross community boundaries      | Medium      | Critical | Central policy engine, precedence property tests, tenant IDs in every authorization query.             |
-| UI becomes unstable or decorative               | Medium      | High     | Semantic design system, visual regression, density modes, measured navigation-change policy.           |
+| Risk                                            | Likelihood  | Impact   | Mitigation / trigger                                                                                                       |
+| ----------------------------------------------- | ----------- | -------- | -------------------------------------------------------------------------------------------------------------------------- |
+| Network effects prevent migration               | High        | Critical | Consent-based structure import, expiring bridge, fast invite activation, community templates.                              |
+| Scope exceeds solo capacity                     | High        | Critical | One active outcome per cycle, hard phase gates, defer discovery/mobile/federation.                                         |
+| Safety operations exceed capacity               | Medium-high | Critical | Invite-only cohorts, 16+, no explicit content, community caps, first-party case tooling.                                   |
+| Media cost or quality misses target             | Medium      | Critical | LiveKit spike, provider abstraction, participant-minute telemetry, capacity rather than quality tiers.                     |
+| E2EE creates misleading guarantees              | Medium      | Critical | Explicit modes, metadata disclosure, maintained MLS, independent review before marketing.                                  |
+| Desktop shell fails capture or resource targets | Medium-high | High     | Mechanical Tauri/Electron gate; Electron still needs true PTT and idle/soak proof, while Tauri capture remains unresolved. |
+| Permission bugs cross community boundaries      | Medium      | Critical | Central policy engine, precedence property tests, tenant IDs in every authorization query.                                 |
+| UI becomes unstable or decorative               | Medium      | High     | Semantic design system, visual regression, density modes, measured navigation-change policy.                               |
 
 ## Recent session checkpoints
 
@@ -190,5 +197,15 @@ Administrator bypass never applies to ownership, billing, security, or private m
 - Verification: `npm test` (11 passing), `npm run typecheck`, `npm run build`, `npm run format:check`, production dependency audit, and full dependency audit all pass. The integrated preview returned HTTP 200 for both the application mount and `/v1/health`.
 - QA corrections: removed the external font request, made message actions keyboard reachable, prevented optimistic/gateway message duplication, reduced mid-width header pressure, and corrected integrated-preview path resolution.
 - Limitation: the initial sandbox-bound server attempt left the in-app browser's only tab on an internal `data:` network-error page. Browser URL policy then blocked inspection and explicitly prohibited another automation surface; P0-005 remains implemented rather than verified.
-- Repository: Git is initialized, but the first commit remains pending because the required `rtk` executable became unavailable in both sandboxed and approved shells before index/ref writes could be performed.
+- Repository: baseline committed as `1de8df9` after required index/ref approval became available.
 - Next: reset the in-app browser tab, complete responsive visual QA, then begin the P0-007 desktop/media shell harness.
+
+### Cycle 2 — 2026-06-29 — completed
+
+- Objective: turn P0-007 into an executable, evidence-producing Windows desktop/media gate without prematurely choosing a shell.
+- Delivered: `apps/desktop` Electron 42.5.1 control candidate, sandboxed/context-isolated preload, explicit display-source selection, Windows loopback request path, device hot-plug probe, shortcut probe, process sampler, JSON evidence view, deterministic gate evaluator, and desktop gate specification.
+- Verification: 3 desktop gate tests, strict desktop typecheck, production harness build, zero-vulnerability install audit, renderer smoke contract, and native preflight pass.
+- Measured: Windows 11 exposed 20 screen/window sources; F8 registration succeeded; renderer ready was 2.392 s in one run; immediate summed process working sets were 464 MB. These are partial signals, not p95 or soak passes.
+- Constraint discovered: Electron's built-in global shortcut API cannot deliver distinct release state, so it fails hold-to-talk without a maintained native adapter. Tauri exposes shortcut state but cannot yet be built here and has no confirmed capture/system-audio path.
+- Browser limitation: the in-app browser URL policy still blocks leaving its internal network-error data page; P0-005 remains implemented.
+- Next: run user-consented capture/audio/hot-plug and timed idle/soak measurements, spike the narrowest viable Electron PTT adapter, and advance the cost model while Tauri/LiveKit prerequisites are blocked.
