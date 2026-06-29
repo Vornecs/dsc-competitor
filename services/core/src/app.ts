@@ -14,6 +14,9 @@ import {
   passkeyLoginVerifySchema,
   createCommunityRequestSchema,
   createChannelRequestSchema,
+  createRoleRequestSchema,
+  updateRoleRequestSchema,
+  createInviteRequestSchema,
   permissionSimulatorRequestSchema,
   resolvePermission,
   type BootstrapState,
@@ -26,6 +29,9 @@ import {
   type Community,
   type Channel,
   type PermissionQuery,
+  type PermissionDecision,
+  type Role,
+  type Invite,
 } from '@cove/contracts';
 import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify';
 import type { WebSocket } from 'ws';
@@ -50,15 +56,28 @@ function problem(
 }
 
 class GatewayHub {
-  private readonly clients = new Set<WebSocket>();
+  private readonly clients = new Map<
+    WebSocket,
+    { accountId?: string; communityIds: Set<string> }
+  >();
   private sequence = 0;
+
+  constructor(private readonly publicCommunityIds: ReadonlySet<string>) {}
 
   get currentSequence() {
     return this.sequence;
   }
 
-  connect(socket: WebSocket, bootstrap: BootstrapState) {
-    this.clients.add(socket);
+  connect(
+    socket: WebSocket,
+    bootstrap: BootstrapState,
+    accountId: string | undefined,
+    communityIds: ReadonlySet<string>,
+  ) {
+    this.clients.set(socket, {
+      ...(accountId ? { accountId } : {}),
+      communityIds: new Set(communityIds),
+    });
     const frame: GatewayServerFrame = {
       op: 'READY',
       data: {
@@ -71,6 +90,18 @@ class GatewayHub {
     socket.on('close', () => this.clients.delete(socket));
   }
 
+  grantCommunityAccess(accountId: string, communityId: string) {
+    for (const access of this.clients.values()) {
+      if (access.accountId === accountId) access.communityIds.add(communityId);
+    }
+  }
+
+  revokeCommunityAccess(accountId: string, communityId: string) {
+    for (const access of this.clients.values()) {
+      if (access.accountId === accountId) access.communityIds.delete(communityId);
+    }
+  }
+
   heartbeat(socket: WebSocket) {
     const frame: GatewayServerFrame = {
       op: 'HEARTBEAT_ACK',
@@ -79,7 +110,13 @@ class GatewayHub {
     socket.send(JSON.stringify(frame));
   }
 
-  publish<T>(type: string, data: T, communityId?: string, actorId?: string) {
+  publish<T>(
+    type: string,
+    data: T,
+    communityId?: string,
+    actorId?: string,
+    audience?: ReadonlySet<string>,
+  ) {
     this.sequence += 1;
     const envelope: EventEnvelope<T> = {
       eventId: crypto.randomUUID(),
@@ -92,8 +129,15 @@ class GatewayHub {
     };
     const frame: GatewayServerFrame = { op: 'EVENT', data: envelope };
     const serialized = JSON.stringify(frame);
-    for (const client of this.clients) {
-      if (client.readyState === client.OPEN) client.send(serialized);
+    for (const [client, access] of this.clients) {
+      const canAccessCommunity =
+        !communityId ||
+        this.publicCommunityIds.has(communityId) ||
+        access.communityIds.has(communityId);
+      const isInAudience = !audience || (access.accountId && audience.has(access.accountId));
+      if (client.readyState === client.OPEN && canAccessCommunity && isInAudience) {
+        client.send(serialized);
+      }
     }
     return envelope;
   }
@@ -107,7 +151,9 @@ export async function buildApp(): Promise<FastifyInstance> {
     },
     disableRequestLogging: process.env.NODE_ENV === 'test',
   });
-  const hub = new GatewayHub();
+  const demoCommunityIds = new Set(demoBootstrap.communities.map((community) => community.id));
+  const demoChannelIds = new Set(demoBootstrap.channels.map((channel) => channel.id));
+  const hub = new GatewayHub(demoCommunityIds);
   const messages: Message[] = structuredClone(demoBootstrap.messages);
   const idempotency = new Map<string, Message>();
 
@@ -139,12 +185,84 @@ export async function buildApp(): Promise<FastifyInstance> {
   // In-memory community state
   const communities = new Map<string, Community>();
   const channelsByCommunity = new Map<string, Channel[]>();
-  const memberships = new Map<
-    string,
-    { accountId: string; role: 'owner' | 'admin' | 'member' }[]
-  >();
+  type Membership = { accountId: string; role: 'owner' | 'admin' | 'member'; roleIds: string[] };
+  const memberships = new Map<string, Membership[]>();
+  const rolesByCommunity = new Map<string, Role[]>();
+  const invitesByCommunity = new Map<string, Invite[]>();
+  const invitesByCode = new Map<string, Invite>();
 
-  function getMembership(communityId: string, accountId: string) {
+  function findDynamicChannel(channelId: string): Channel | undefined {
+    for (const channels of channelsByCommunity.values()) {
+      const channel = channels.find((candidate) => candidate.id === channelId);
+      if (channel) return channel;
+    }
+    return undefined;
+  }
+
+  function resolveMemberPermission(
+    communityId: string,
+    membership: Membership,
+    memberId: string,
+    permission: string,
+  ): PermissionDecision {
+    const roles = rolesByCommunity.get(communityId) ?? [];
+    const everyoneRole = roles.find((role) => role.managed && role.name === '@everyone');
+    const assignedRoles = roles.filter((role) => membership.roleIds.includes(role.id));
+    const rules = [
+      ...(everyoneRole?.permissions.map((rule) => ({
+        subject: 'base' as const,
+        permission: rule.permission,
+        effect: rule.effect,
+      })) ?? []),
+      ...assignedRoles.flatMap((role) =>
+        role.permissions.map((rule) => ({
+          subject: 'role' as const,
+          subjectId: role.id,
+          permission: rule.permission,
+          effect: rule.effect,
+        })),
+      ),
+    ];
+
+    return resolvePermission({
+      permission,
+      memberId,
+      roleIds: membership.roleIds,
+      isOwner: membership.role === 'owner',
+      isAdministrator: membership.role === 'admin',
+      rules,
+    });
+  }
+
+  function requirePermission(
+    reply: FastifyReply,
+    communityId: string,
+    membership: Membership,
+    memberId: string,
+    permission: string,
+    requestUrl: string,
+  ): PermissionDecision | false {
+    const decision = resolveMemberPermission(communityId, membership, memberId, permission);
+    if (!decision.allowed) {
+      problem(reply, 403, 'Permission denied', decision.explanation, requestUrl);
+      return false;
+    }
+    return decision;
+  }
+
+  function messageAudience(communityId: string, permission: string): ReadonlySet<string> {
+    const audience = new Set<string>();
+    for (const membership of memberships.get(communityId) ?? []) {
+      if (
+        resolveMemberPermission(communityId, membership, membership.accountId, permission).allowed
+      ) {
+        audience.add(membership.accountId);
+      }
+    }
+    return audience;
+  }
+
+  function getMembership(communityId: string, accountId: string): Membership | undefined {
     const list = memberships.get(communityId);
     if (!list) return undefined;
     return list.find((m) => m.accountId === accountId);
@@ -155,7 +273,7 @@ export async function buildApp(): Promise<FastifyInstance> {
     communityId: string,
     accountId: string,
     requestUrl: string,
-  ): { role: 'owner' | 'admin' | 'member' } | false {
+  ): Membership | false {
     const membership = getMembership(communityId, accountId);
     if (!membership) {
       problem(reply, 403, 'Not a member', 'You are not a member of this community.', requestUrl);
@@ -202,7 +320,10 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(websocket);
 
   const currentBootstrap = (): BootstrapState =>
-    bootstrapStateSchema.parse({ ...demoBootstrap, messages });
+    bootstrapStateSchema.parse({
+      ...demoBootstrap,
+      messages: messages.filter((message) => demoChannelIds.has(message.channelId)),
+    });
 
   app.get('/v1/health', async () => ({
     status: 'ok',
@@ -533,10 +654,49 @@ export async function buildApp(): Promise<FastifyInstance> {
 
   app.get<{ Params: { channelId: string } }>(
     '/v1/channels/:channelId/messages',
-    async (request) => ({
-      items: messages.filter((message) => message.channelId === request.params.channelId),
-      nextCursor: null,
-    }),
+    async (request, reply) => {
+      const demoChannel = demoBootstrap.channels.find(
+        (candidate) => candidate.id === request.params.channelId,
+      );
+      const dynamicChannel = findDynamicChannel(request.params.channelId);
+      const channel = demoChannel ?? dynamicChannel;
+      if (!channel || channel.kind !== 'text') {
+        return problem(
+          reply,
+          404,
+          'Channel not found',
+          'The requested text channel does not exist.',
+          request.url,
+        );
+      }
+
+      if (dynamicChannel) {
+        const ok = await requireAuth(request, reply);
+        if (!ok) return;
+        const { account: authenticatedAccount } = (request as any).user;
+        const membership = requireMembership(
+          reply,
+          dynamicChannel.communityId,
+          authenticatedAccount.id,
+          request.url,
+        );
+        if (!membership) return;
+        const permission = requirePermission(
+          reply,
+          dynamicChannel.communityId,
+          membership,
+          authenticatedAccount.id,
+          'message.read',
+          request.url,
+        );
+        if (!permission) return;
+      }
+
+      return reply.code(200).send({
+        items: messages.filter((message) => message.channelId === channel.id),
+        nextCursor: null,
+      });
+    },
   );
 
   app.post<{ Params: { channelId: string } }>(
@@ -553,9 +713,6 @@ export async function buildApp(): Promise<FastifyInstance> {
         );
       }
 
-      const existing = idempotency.get(idempotencyKey);
-      if (existing) return reply.code(200).send(existing);
-
       const parsed = sendMessageRequestSchema.safeParse(request.body);
       if (!parsed.success) {
         return problem(
@@ -567,7 +724,11 @@ export async function buildApp(): Promise<FastifyInstance> {
         );
       }
 
-      const channel = demoBootstrap.channels.find((item) => item.id === request.params.channelId);
+      const demoChannel = demoBootstrap.channels.find(
+        (candidate) => candidate.id === request.params.channelId,
+      );
+      const dynamicChannel = findDynamicChannel(request.params.channelId);
+      const channel = demoChannel ?? dynamicChannel;
       if (!channel || channel.kind !== 'text') {
         return problem(
           reply,
@@ -577,6 +738,30 @@ export async function buildApp(): Promise<FastifyInstance> {
           request.url,
         );
       }
+      let messageAuthor = account;
+      if (dynamicChannel) {
+        const ok = await requireAuth(request, reply);
+        if (!ok) return;
+        const { account: authenticatedAccount } = (request as any).user;
+        const membership = requireMembership(
+          reply,
+          dynamicChannel.communityId,
+          authenticatedAccount.id,
+          request.url,
+        );
+        if (!membership) return;
+        const permission = requirePermission(
+          reply,
+          dynamicChannel.communityId,
+          membership,
+          authenticatedAccount.id,
+          'message.send',
+          request.url,
+        );
+        if (!permission) return;
+        messageAuthor = authenticatedAccount;
+      }
+
       if (channel.privacy.mode === 'sealed') {
         return problem(
           reply,
@@ -587,10 +772,14 @@ export async function buildApp(): Promise<FastifyInstance> {
         );
       }
 
+      const scopedIdempotencyKey = `${messageAuthor.id}:${channel.id}:${idempotencyKey}`;
+      const existing = idempotency.get(scopedIdempotencyKey);
+      if (existing) return reply.code(200).send(existing);
+
       const message = messageSchema.parse({
         id: crypto.randomUUID(),
         channelId: channel.id,
-        author: account,
+        author: messageAuthor,
         availability: 'plaintext',
         content: parsed.data.content,
         createdAt: new Date().toISOString(),
@@ -598,8 +787,14 @@ export async function buildApp(): Promise<FastifyInstance> {
         reactions: [],
       });
       messages.push(message);
-      idempotency.set(idempotencyKey, message);
-      hub.publish('message.created', message, channel.communityId, account.id);
+      idempotency.set(scopedIdempotencyKey, message);
+      hub.publish(
+        'message.created',
+        message,
+        channel.communityId,
+        messageAuthor.id,
+        dynamicChannel ? messageAudience(channel.communityId, 'message.read') : undefined,
+      );
       return reply.code(201).send(message);
     },
   );
@@ -631,8 +826,30 @@ export async function buildApp(): Promise<FastifyInstance> {
       memberCount: 1,
     };
     communities.set(communityId, community);
-    memberships.set(communityId, [{ accountId: account.id, role: 'owner' }]);
+    memberships.set(communityId, [{ accountId: account.id, role: 'owner', roleIds: [] }]);
     channelsByCommunity.set(communityId, []);
+
+    // Create default @everyone role
+    const everyoneRole: Role = {
+      id: `role-${crypto.randomUUID()}`,
+      communityId,
+      name: '@everyone',
+      description: 'Default role for all members',
+      color: '#6f8cff',
+      hoist: false,
+      mentionable: false,
+      managed: true,
+      permissions: [
+        { permission: 'message.send', effect: 'allow' },
+        { permission: 'message.read', effect: 'allow' },
+        { permission: 'message.react', effect: 'allow' },
+      ],
+      createdAt: new Date().toISOString(),
+    };
+    rolesByCommunity.set(communityId, [everyoneRole]);
+    invitesByCommunity.set(communityId, []);
+    hub.grantCommunityAccess(account.id, communityId);
+
     app.log.info(`[COMMUNITY] Created ${communityId} by ${account.id}`);
     return reply.code(201).send(community);
   });
@@ -704,9 +921,10 @@ export async function buildApp(): Promise<FastifyInstance> {
         );
       }
 
-      members.push({ accountId: account.id, role: 'member' });
+      members.push({ accountId: account.id, role: 'member', roleIds: [] });
       memberships.set(community.id, members);
       community.memberCount = members.length;
+      hub.grantCommunityAccess(account.id, community.id);
       return reply.code(204).send();
     },
   );
@@ -769,10 +987,16 @@ export async function buildApp(): Promise<FastifyInstance> {
       }
 
       members.splice(targetIndex, 1);
+      hub.revokeCommunityAccess(targetMemberId, community.id);
       if (members.length === 0) {
+        for (const invite of invitesByCommunity.get(community.id) ?? []) {
+          invitesByCode.delete(invite.code);
+        }
         memberships.delete(community.id);
         communities.delete(community.id);
         channelsByCommunity.delete(community.id);
+        rolesByCommunity.delete(community.id);
+        invitesByCommunity.delete(community.id);
       } else {
         memberships.set(community.id, members);
         community.memberCount = members.length;
@@ -873,6 +1097,651 @@ export async function buildApp(): Promise<FastifyInstance> {
     },
   );
 
+  // Roles
+  app.post<{ Params: { communityId: string } }>(
+    '/v1/communities/:communityId/roles',
+    async (request, reply) => {
+      const ok = await requireAuth(request, reply);
+      if (!ok) return;
+
+      const { account } = (request as any).user;
+      const community = communities.get(request.params.communityId);
+      if (!community) {
+        return problem(
+          reply,
+          404,
+          'Community not found',
+          'The requested community does not exist.',
+          request.url,
+        );
+      }
+      const membership = requireMembership(reply, community.id, account.id, request.url);
+      if (!membership) return;
+      if (membership.role !== 'owner' && membership.role !== 'admin') {
+        return problem(
+          reply,
+          403,
+          'Forbidden',
+          'Only community owners and admins can create roles.',
+          request.url,
+        );
+      }
+
+      const parsed = createRoleRequestSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return problem(
+          reply,
+          400,
+          'Invalid request',
+          parsed.error.issues.map((issue) => issue.message).join('; '),
+          request.url,
+        );
+      }
+
+      const { name, description, color, hoist, mentionable, permissions } = parsed.data;
+      const roleId = `role-${crypto.randomUUID()}`;
+      const role: Role = {
+        id: roleId,
+        communityId: community.id,
+        name,
+        description,
+        color: color ?? '#6f8cff',
+        hoist: hoist ?? false,
+        mentionable: mentionable ?? false,
+        managed: false,
+        permissions: permissions ?? [],
+        createdAt: new Date().toISOString(),
+      };
+      const roles = rolesByCommunity.get(community.id) || [];
+      roles.push(role);
+      rolesByCommunity.set(community.id, roles);
+      hub.publish('role.created', role, community.id, account.id);
+      return reply.code(201).send(role);
+    },
+  );
+
+  app.get<{ Params: { communityId: string } }>(
+    '/v1/communities/:communityId/roles',
+    async (request, reply) => {
+      const ok = await requireAuth(request, reply);
+      if (!ok) return;
+
+      const { account } = (request as any).user;
+      const community = communities.get(request.params.communityId);
+      if (!community) {
+        return problem(
+          reply,
+          404,
+          'Community not found',
+          'The requested community does not exist.',
+          request.url,
+        );
+      }
+      const membership = requireMembership(reply, community.id, account.id, request.url);
+      if (!membership) return;
+
+      const roles = rolesByCommunity.get(community.id) || [];
+      return reply.code(200).send({ roles });
+    },
+  );
+
+  app.get<{ Params: { communityId: string; roleId: string } }>(
+    '/v1/communities/:communityId/roles/:roleId',
+    async (request, reply) => {
+      const ok = await requireAuth(request, reply);
+      if (!ok) return;
+
+      const { account } = (request as any).user;
+      const community = communities.get(request.params.communityId);
+      if (!community) {
+        return problem(
+          reply,
+          404,
+          'Community not found',
+          'The requested community does not exist.',
+          request.url,
+        );
+      }
+      const membership = requireMembership(reply, community.id, account.id, request.url);
+      if (!membership) return;
+
+      const roles = rolesByCommunity.get(community.id) || [];
+      const role = roles.find((r) => r.id === request.params.roleId);
+      if (!role) {
+        return problem(
+          reply,
+          404,
+          'Role not found',
+          'The requested role does not exist.',
+          request.url,
+        );
+      }
+      return reply.code(200).send(role);
+    },
+  );
+
+  app.patch<{ Params: { communityId: string; roleId: string } }>(
+    '/v1/communities/:communityId/roles/:roleId',
+    async (request, reply) => {
+      const ok = await requireAuth(request, reply);
+      if (!ok) return;
+
+      const { account } = (request as any).user;
+      const community = communities.get(request.params.communityId);
+      if (!community) {
+        return problem(
+          reply,
+          404,
+          'Community not found',
+          'The requested community does not exist.',
+          request.url,
+        );
+      }
+      const membership = requireMembership(reply, community.id, account.id, request.url);
+      if (!membership) return;
+      if (membership.role !== 'owner' && membership.role !== 'admin') {
+        return problem(
+          reply,
+          403,
+          'Forbidden',
+          'Only community owners and admins can edit roles.',
+          request.url,
+        );
+      }
+
+      const parsed = updateRoleRequestSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return problem(
+          reply,
+          400,
+          'Invalid request',
+          parsed.error.issues.map((issue) => issue.message).join('; '),
+          request.url,
+        );
+      }
+
+      const roles = rolesByCommunity.get(community.id) || [];
+      const roleIndex = roles.findIndex((r) => r.id === request.params.roleId);
+      if (roleIndex === -1) {
+        return problem(
+          reply,
+          404,
+          'Role not found',
+          'The requested role does not exist.',
+          request.url,
+        );
+      }
+
+      const existingRole = roles[roleIndex]!;
+      if (existingRole.managed) {
+        return problem(reply, 403, 'Forbidden', 'Managed roles cannot be edited.', request.url);
+      }
+
+      const updatedRole: Role = {
+        ...existingRole,
+        name: parsed.data.name ?? existingRole.name,
+        ...(parsed.data.description === undefined
+          ? {}
+          : parsed.data.description === null
+            ? { description: undefined }
+            : { description: parsed.data.description }),
+        ...(parsed.data.color === undefined
+          ? {}
+          : parsed.data.color === null
+            ? { color: undefined }
+            : { color: parsed.data.color }),
+        hoist: parsed.data.hoist ?? existingRole.hoist,
+        mentionable: parsed.data.mentionable ?? existingRole.mentionable,
+        permissions: parsed.data.permissions ?? existingRole.permissions,
+        managed: false,
+        createdAt: existingRole.createdAt,
+      };
+      roles[roleIndex] = updatedRole;
+      rolesByCommunity.set(community.id, roles);
+      hub.publish('role.updated', updatedRole, community.id, account.id);
+      return reply.code(200).send(updatedRole);
+    },
+  );
+
+  app.delete<{ Params: { communityId: string; roleId: string } }>(
+    '/v1/communities/:communityId/roles/:roleId',
+    async (request, reply) => {
+      const ok = await requireAuth(request, reply);
+      if (!ok) return;
+
+      const { account } = (request as any).user;
+      const community = communities.get(request.params.communityId);
+      if (!community) {
+        return problem(
+          reply,
+          404,
+          'Community not found',
+          'The requested community does not exist.',
+          request.url,
+        );
+      }
+      const membership = requireMembership(reply, community.id, account.id, request.url);
+      if (!membership) return;
+      if (membership.role !== 'owner') {
+        return problem(
+          reply,
+          403,
+          'Forbidden',
+          'Only community owners can delete roles.',
+          request.url,
+        );
+      }
+
+      const roles = rolesByCommunity.get(community.id) || [];
+      const roleIndex = roles.findIndex((r) => r.id === request.params.roleId);
+      if (roleIndex === -1) {
+        return problem(
+          reply,
+          404,
+          'Role not found',
+          'The requested role does not exist.',
+          request.url,
+        );
+      }
+
+      const role = roles[roleIndex]!;
+      if (role.managed) {
+        return problem(reply, 403, 'Forbidden', 'Managed roles cannot be deleted.', request.url);
+      }
+
+      roles.splice(roleIndex, 1);
+      rolesByCommunity.set(community.id, roles);
+      for (const member of memberships.get(community.id) ?? []) {
+        member.roleIds = member.roleIds.filter((roleId) => roleId !== role.id);
+      }
+      hub.publish(
+        'role.deleted',
+        { roleId: role.id, communityId: community.id },
+        community.id,
+        account.id,
+      );
+      return reply.code(204).send();
+    },
+  );
+
+  app.put<{ Params: { communityId: string; memberId: string; roleId: string } }>(
+    '/v1/communities/:communityId/members/:memberId/roles/:roleId',
+    async (request, reply) => {
+      const ok = await requireAuth(request, reply);
+      if (!ok) return;
+
+      const { account } = (request as any).user;
+      const community = communities.get(request.params.communityId);
+      if (!community) {
+        return problem(
+          reply,
+          404,
+          'Community not found',
+          'The requested community does not exist.',
+          request.url,
+        );
+      }
+      const actorMembership = requireMembership(reply, community.id, account.id, request.url);
+      if (!actorMembership) return;
+      if (actorMembership.role !== 'owner' && actorMembership.role !== 'admin') {
+        return problem(
+          reply,
+          403,
+          'Forbidden',
+          'Only community owners and admins can assign roles.',
+          request.url,
+        );
+      }
+
+      const targetMembership = getMembership(community.id, request.params.memberId);
+      if (!targetMembership) {
+        return problem(
+          reply,
+          404,
+          'Member not found',
+          'The specified member is not part of this community.',
+          request.url,
+        );
+      }
+      const role = (rolesByCommunity.get(community.id) ?? []).find(
+        (candidate) => candidate.id === request.params.roleId,
+      );
+      if (!role) {
+        return problem(
+          reply,
+          404,
+          'Role not found',
+          'The requested role does not exist.',
+          request.url,
+        );
+      }
+      if (role.managed) {
+        return problem(
+          reply,
+          409,
+          'Managed role',
+          'The managed @everyone role applies automatically and cannot be assigned.',
+          request.url,
+        );
+      }
+
+      if (!targetMembership.roleIds.includes(role.id)) {
+        targetMembership.roleIds.push(role.id);
+        hub.publish(
+          'member.role_assigned',
+          { communityId: community.id, memberId: request.params.memberId, roleId: role.id },
+          community.id,
+          account.id,
+        );
+      }
+      return reply.code(204).send();
+    },
+  );
+
+  app.delete<{ Params: { communityId: string; memberId: string; roleId: string } }>(
+    '/v1/communities/:communityId/members/:memberId/roles/:roleId',
+    async (request, reply) => {
+      const ok = await requireAuth(request, reply);
+      if (!ok) return;
+
+      const { account } = (request as any).user;
+      const community = communities.get(request.params.communityId);
+      if (!community) {
+        return problem(
+          reply,
+          404,
+          'Community not found',
+          'The requested community does not exist.',
+          request.url,
+        );
+      }
+      const actorMembership = requireMembership(reply, community.id, account.id, request.url);
+      if (!actorMembership) return;
+      if (actorMembership.role !== 'owner' && actorMembership.role !== 'admin') {
+        return problem(
+          reply,
+          403,
+          'Forbidden',
+          'Only community owners and admins can remove roles.',
+          request.url,
+        );
+      }
+
+      const targetMembership = getMembership(community.id, request.params.memberId);
+      if (!targetMembership) {
+        return problem(
+          reply,
+          404,
+          'Member not found',
+          'The specified member is not part of this community.',
+          request.url,
+        );
+      }
+      const role = (rolesByCommunity.get(community.id) ?? []).find(
+        (candidate) => candidate.id === request.params.roleId,
+      );
+      if (!role) {
+        return problem(
+          reply,
+          404,
+          'Role not found',
+          'The requested role does not exist.',
+          request.url,
+        );
+      }
+
+      targetMembership.roleIds = targetMembership.roleIds.filter((roleId) => roleId !== role.id);
+      hub.publish(
+        'member.role_removed',
+        { communityId: community.id, memberId: request.params.memberId, roleId: role.id },
+        community.id,
+        account.id,
+      );
+      return reply.code(204).send();
+    },
+  );
+
+  // Invites
+  app.post<{ Params: { communityId: string } }>(
+    '/v1/communities/:communityId/invites',
+    async (request, reply) => {
+      const ok = await requireAuth(request, reply);
+      if (!ok) return;
+
+      const { account } = (request as any).user;
+      const community = communities.get(request.params.communityId);
+      if (!community) {
+        return problem(
+          reply,
+          404,
+          'Community not found',
+          'The requested community does not exist.',
+          request.url,
+        );
+      }
+      const membership = requireMembership(reply, community.id, account.id, request.url);
+      if (!membership) return;
+      if (membership.role !== 'owner' && membership.role !== 'admin') {
+        return problem(
+          reply,
+          403,
+          'Forbidden',
+          'Only community owners and admins can create invites.',
+          request.url,
+        );
+      }
+
+      const parsed = createInviteRequestSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return problem(
+          reply,
+          400,
+          'Invalid request',
+          parsed.error.issues.map((issue) => issue.message).join('; '),
+          request.url,
+        );
+      }
+
+      const { maxUses, expiresInSeconds } = parsed.data;
+      const inviteId = `invite-${crypto.randomUUID()}`;
+      const code = crypto.randomBytes(6).toString('base64url').substring(0, 8);
+      const now = new Date();
+      const expiresAt = new Date(
+        now.getTime() + (expiresInSeconds ?? 7 * 24 * 60 * 60) * 1_000,
+      ).toISOString();
+
+      const invite: Invite = {
+        id: inviteId,
+        communityId: community.id,
+        code,
+        createdBy: account.id,
+        createdAt: now.toISOString(),
+        expiresAt,
+        maxUses: maxUses ?? null,
+        uses: 0,
+      };
+
+      const invites = invitesByCommunity.get(community.id) || [];
+      invites.push(invite);
+      invitesByCommunity.set(community.id, invites);
+      invitesByCode.set(code, invite);
+
+      const url = `https://cove.chat/invite/${code}`;
+
+      hub.publish(
+        'invite.created',
+        { id: invite.id, communityId: invite.communityId, expiresAt: invite.expiresAt },
+        community.id,
+        account.id,
+      );
+      return reply.code(201).send({ invite, url });
+    },
+  );
+
+  app.get<{ Params: { communityId: string } }>(
+    '/v1/communities/:communityId/invites',
+    async (request, reply) => {
+      const ok = await requireAuth(request, reply);
+      if (!ok) return;
+
+      const { account } = (request as any).user;
+      const community = communities.get(request.params.communityId);
+      if (!community) {
+        return problem(
+          reply,
+          404,
+          'Community not found',
+          'The requested community does not exist.',
+          request.url,
+        );
+      }
+      const membership = requireMembership(reply, community.id, account.id, request.url);
+      if (!membership) return;
+      if (membership.role !== 'owner' && membership.role !== 'admin') {
+        return problem(
+          reply,
+          403,
+          'Forbidden',
+          'Only community owners and admins can list invites.',
+          request.url,
+        );
+      }
+
+      const invites = (invitesByCommunity.get(community.id) ?? []).filter(
+        (invite) =>
+          new Date(invite.expiresAt).getTime() > Date.now() &&
+          (invite.maxUses === null || invite.uses < invite.maxUses),
+      );
+      return reply.code(200).send({ invites });
+    },
+  );
+
+  app.delete<{ Params: { communityId: string; inviteId: string } }>(
+    '/v1/communities/:communityId/invites/:inviteId',
+    async (request, reply) => {
+      const ok = await requireAuth(request, reply);
+      if (!ok) return;
+
+      const { account } = (request as any).user;
+      const community = communities.get(request.params.communityId);
+      if (!community) {
+        return problem(
+          reply,
+          404,
+          'Community not found',
+          'The requested community does not exist.',
+          request.url,
+        );
+      }
+      const membership = requireMembership(reply, community.id, account.id, request.url);
+      if (!membership) return;
+      if (membership.role !== 'owner' && membership.role !== 'admin') {
+        return problem(
+          reply,
+          403,
+          'Forbidden',
+          'Only community owners and admins can revoke invites.',
+          request.url,
+        );
+      }
+
+      const invites = invitesByCommunity.get(community.id) ?? [];
+      const inviteIndex = invites.findIndex((invite) => invite.id === request.params.inviteId);
+      if (inviteIndex === -1) {
+        return problem(
+          reply,
+          404,
+          'Invite not found',
+          'The requested invite does not exist.',
+          request.url,
+        );
+      }
+      const [invite] = invites.splice(inviteIndex, 1);
+      if (invite) invitesByCode.delete(invite.code);
+      hub.publish(
+        'invite.revoked',
+        { communityId: community.id, inviteId: request.params.inviteId },
+        community.id,
+        account.id,
+      );
+      return reply.code(204).send();
+    },
+  );
+
+  app.post<{ Params: { code: string } }>('/v1/invites/:code', async (request, reply) => {
+    const ok = await requireAuth(request, reply);
+    if (!ok) return;
+
+    const { account } = (request as any).user;
+    const invite = invitesByCode.get(request.params.code);
+    if (!invite) {
+      return problem(
+        reply,
+        404,
+        'Invite not found',
+        'The invite code is invalid or has expired.',
+        request.url,
+      );
+    }
+
+    const community = communities.get(invite.communityId);
+    if (!community) {
+      return problem(
+        reply,
+        404,
+        'Community not found',
+        'The community for this invite no longer exists.',
+        request.url,
+      );
+    }
+
+    // Check if already a member
+    const members = memberships.get(community.id) || [];
+    if (members.some((m) => m.accountId === account.id)) {
+      return problem(
+        reply,
+        409,
+        'Already a member',
+        'You are already a member of this community.',
+        request.url,
+      );
+    }
+
+    // Check if invite is expired
+    if (new Date(invite.expiresAt) < new Date()) {
+      return problem(reply, 410, 'Invite expired', 'This invite has expired.', request.url);
+    }
+
+    // Check if invite has reached max uses
+    if (invite.maxUses !== null && invite.uses >= invite.maxUses) {
+      return problem(
+        reply,
+        429,
+        'Invite exhausted',
+        'This invite has reached its maximum number of uses.',
+        request.url,
+      );
+    }
+
+    // Add member
+    members.push({ accountId: account.id, role: 'member', roleIds: [] });
+    memberships.set(community.id, members);
+    community.memberCount = members.length;
+    hub.grantCommunityAccess(account.id, community.id);
+
+    // Update invite uses
+    invite.uses += 1;
+    invitesByCode.set(request.params.code, invite);
+
+    hub.publish(
+      'member.joined',
+      { accountId: account.id, communityId: community.id },
+      community.id,
+      account.id,
+    );
+    return reply.code(204).send();
+  });
+
   // Permission simulator
   app.post('/v1/permissions/simulate', async (request, reply) => {
     const parsed = permissionSimulatorRequestSchema.safeParse(request.body);
@@ -915,8 +1784,24 @@ export async function buildApp(): Promise<FastifyInstance> {
     return reply.code(200).send(decision);
   });
 
-  app.get('/v1/gateway', { websocket: true }, (socket) => {
-    hub.connect(socket, currentBootstrap());
+  app.get('/v1/gateway', { websocket: true }, (socket, request) => {
+    const requestUrl = new URL(request.url, 'http://localhost');
+    const queryToken = requestUrl.searchParams.get('token');
+    const authorization = request.headers.authorization;
+    const headerToken = authorization?.startsWith('Bearer ')
+      ? authorization.substring(7)
+      : undefined;
+    const session = sessions.get(queryToken ?? headerToken ?? '');
+    const gatewayAccount = session ? accountsByEmail.get(session.email) : undefined;
+    const accessibleCommunityIds = new Set<string>();
+    if (gatewayAccount) {
+      for (const [communityId, members] of memberships) {
+        if (members.some((member) => member.accountId === gatewayAccount.id)) {
+          accessibleCommunityIds.add(communityId);
+        }
+      }
+    }
+    hub.connect(socket, currentBootstrap(), gatewayAccount?.id, accessibleCommunityIds);
     socket.on('message', (raw) => {
       let decoded: unknown;
       try {

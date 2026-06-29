@@ -78,6 +78,77 @@ describe('realtime gateway', () => {
 
     expect(frames.map((frame) => (frame as { op: string }).op)).toEqual(['READY', 'HEARTBEAT_ACK']);
   });
+
+  it('routes community events only to authenticated members', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const email = `gateway-${crypto.randomUUID()}@test.cove.chat`;
+    const sendRes = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/email/send-code',
+      payload: { email },
+    });
+    const verifyRes = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/email/verify',
+      payload: { email, code: '123456', challengeId: sendRes.json().challengeId },
+    });
+    const token = verifyRes.json().sessionToken as string;
+
+    await app.listen({ host: '127.0.0.1', port: 0 });
+    const address = app.server.address();
+    if (!address || typeof address === 'string') throw new Error('Expected a TCP test address');
+
+    const publicSocket = new WebSocket(`ws://127.0.0.1:${address.port}/v1/gateway`);
+    const memberSocket = new WebSocket(
+      `ws://127.0.0.1:${address.port}/v1/gateway?token=${encodeURIComponent(token)}`,
+    );
+    const publicFrames: { op: string }[] = [];
+    const waitForReady = (socket: WebSocket, frames?: { op: string }[]) =>
+      new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error('Gateway READY timed out')), 3_000);
+        socket.on('message', (raw) => {
+          const frame = gatewayServerFrameSchema.parse(JSON.parse(raw.toString()));
+          frames?.push(frame);
+          if (frame.op === 'READY') {
+            clearTimeout(timeout);
+            resolve();
+          }
+        });
+        socket.on('error', reject);
+      });
+    await Promise.all([waitForReady(publicSocket, publicFrames), waitForReady(memberSocket)]);
+
+    const eventPromise = new Promise<{ op: string; data: { type?: string } }>((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('Member event timed out')), 3_000);
+      memberSocket.on('message', (raw) => {
+        const frame = gatewayServerFrameSchema.parse(JSON.parse(raw.toString()));
+        if (frame.op === 'EVENT') {
+          clearTimeout(timeout);
+          resolve(frame);
+        }
+      });
+    });
+    const communityRes = await app.inject({
+      method: 'POST',
+      url: '/v1/communities',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 'Gateway Privacy' },
+    });
+    await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityRes.json().id}/channels`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 'private', kind: 'text', category: 'Chat' },
+    });
+
+    const memberEvent = await eventPromise;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(memberEvent.data.type).toBe('channel.created');
+    expect(publicFrames.map((frame) => frame.op)).toEqual(['READY']);
+    publicSocket.close();
+    memberSocket.close();
+  });
 });
 
 describe('authentication API', () => {
@@ -481,5 +552,596 @@ describe('permission simulator', () => {
     const decision = res.json();
     expect(decision.allowed).toBe(false);
     expect(decision.source).toBe('default-deny');
+  });
+});
+
+describe('role API', () => {
+  async function getAuth(app: Awaited<ReturnType<typeof buildApp>>) {
+    const email = `user-${crypto.randomUUID()}@test.cove.chat`;
+    const sendRes = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/email/send-code',
+      payload: { email },
+    });
+    const { challengeId } = sendRes.json();
+    const verifyRes = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/email/verify',
+      payload: { email, code: '123456', challengeId },
+    });
+    const data = verifyRes.json();
+    return {
+      token: data.sessionToken as string,
+      account: data.account as { id: string; handle: string },
+    };
+  }
+
+  it('creates a role and lists roles', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const { token } = await getAuth(app);
+
+    const createRes = await app.inject({
+      method: 'POST',
+      url: '/v1/communities',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 'Test Guild' },
+    });
+    const communityId = createRes.json().id;
+
+    const roleRes = await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/roles`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 'Moderator', color: '#ff0000', hoist: true },
+    });
+    expect(roleRes.statusCode).toBe(201);
+    const role = roleRes.json();
+    expect(role.name).toBe('Moderator');
+    expect(role.color).toBe('#ff0000');
+    expect(role.hoist).toBe(true);
+    expect(role.communityId).toBe(communityId);
+
+    const listRes = await app.inject({
+      method: 'GET',
+      url: `/v1/communities/${communityId}/roles`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(listRes.statusCode).toBe(200);
+    const { roles } = listRes.json();
+    expect(roles.length).toBe(2); // @everyone + Moderator
+    expect(roles.some((r: any) => r.name === '@everyone')).toBe(true);
+    expect(roles.some((r: any) => r.name === 'Moderator')).toBe(true);
+  });
+
+  it('gets a specific role', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const { token } = await getAuth(app);
+
+    const createRes = await app.inject({
+      method: 'POST',
+      url: '/v1/communities',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 'Test Guild' },
+    });
+    const communityId = createRes.json().id;
+
+    const roleRes = await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/roles`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 'VIP', description: 'Special members' },
+    });
+    const role = roleRes.json();
+
+    const getRes = await app.inject({
+      method: 'GET',
+      url: `/v1/communities/${communityId}/roles/${role.id}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(getRes.statusCode).toBe(200);
+    expect(getRes.json().name).toBe('VIP');
+    expect(getRes.json().description).toBe('Special members');
+  });
+
+  it('updates a role', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const { token } = await getAuth(app);
+
+    const createRes = await app.inject({
+      method: 'POST',
+      url: '/v1/communities',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 'Test Guild' },
+    });
+    const communityId = createRes.json().id;
+
+    const roleRes = await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/roles`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 'Moderator' },
+    });
+    const role = roleRes.json();
+
+    const updateRes = await app.inject({
+      method: 'PATCH',
+      url: `/v1/communities/${communityId}/roles/${role.id}`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 'Senior Moderator', color: '#00ff00' },
+    });
+    expect(updateRes.statusCode).toBe(200);
+    const updatedRole = updateRes.json();
+    expect(updatedRole.name).toBe('Senior Moderator');
+    expect(updatedRole.color).toBe('#00ff00');
+  });
+
+  it('deletes a role', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const { token } = await getAuth(app);
+
+    const createRes = await app.inject({
+      method: 'POST',
+      url: '/v1/communities',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 'Test Guild' },
+    });
+    const communityId = createRes.json().id;
+
+    const roleRes = await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/roles`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 'Temp Role' },
+    });
+    const role = roleRes.json();
+
+    const deleteRes = await app.inject({
+      method: 'DELETE',
+      url: `/v1/communities/${communityId}/roles/${role.id}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(deleteRes.statusCode).toBe(204);
+
+    const listRes = await app.inject({
+      method: 'GET',
+      url: `/v1/communities/${communityId}/roles`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    const { roles } = listRes.json();
+    expect(roles.length).toBe(1); // Only @everyone remains
+    expect(roles[0].name).toBe('@everyone');
+  });
+
+  it('rejects role creation by non-admin members', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const { token: ownerToken } = await getAuth(app);
+    const { token: memberToken } = await getAuth(app);
+
+    const createRes = await app.inject({
+      method: 'POST',
+      url: '/v1/communities',
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { name: 'Restricted Guild' },
+    });
+    const communityId = createRes.json().id;
+
+    await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/join`,
+      headers: { authorization: `Bearer ${memberToken}` },
+    });
+
+    const roleRes = await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/roles`,
+      headers: { authorization: `Bearer ${memberToken}` },
+      payload: { name: 'Test Role' },
+    });
+    expect(roleRes.statusCode).toBe(403);
+  });
+
+  it('assigns and removes a role from a community member', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const { token: ownerToken } = await getAuth(app);
+    const { token: memberToken, account: memberAccount } = await getAuth(app);
+
+    const communityRes = await app.inject({
+      method: 'POST',
+      url: '/v1/communities',
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { name: 'Role Assignment Guild' },
+    });
+    const communityId = communityRes.json().id;
+    await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/join`,
+      headers: { authorization: `Bearer ${memberToken}` },
+    });
+    const roleRes = await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/roles`,
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: {
+        name: 'Muted',
+        permissions: [{ permission: 'message.send', effect: 'deny' }],
+      },
+    });
+    const roleId = roleRes.json().id;
+
+    const assignRes = await app.inject({
+      method: 'PUT',
+      url: `/v1/communities/${communityId}/members/${memberAccount.id}/roles/${roleId}`,
+      headers: { authorization: `Bearer ${ownerToken}` },
+    });
+    expect(assignRes.statusCode).toBe(204);
+
+    const memberAssignRes = await app.inject({
+      method: 'PUT',
+      url: `/v1/communities/${communityId}/members/${memberAccount.id}/roles/${roleId}`,
+      headers: { authorization: `Bearer ${memberToken}` },
+    });
+    expect(memberAssignRes.statusCode).toBe(403);
+
+    const removeRes = await app.inject({
+      method: 'DELETE',
+      url: `/v1/communities/${communityId}/members/${memberAccount.id}/roles/${roleId}`,
+      headers: { authorization: `Bearer ${ownerToken}` },
+    });
+    expect(removeRes.statusCode).toBe(204);
+  });
+});
+
+describe('permission-dependent community messages', () => {
+  async function getAuth(app: Awaited<ReturnType<typeof buildApp>>) {
+    const email = `user-${crypto.randomUUID()}@test.cove.chat`;
+    const sendRes = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/email/send-code',
+      payload: { email },
+    });
+    const { challengeId } = sendRes.json();
+    const verifyRes = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/email/verify',
+      payload: { email, code: '123456', challengeId },
+    });
+    const data = verifyRes.json();
+    return {
+      token: data.sessionToken as string,
+      account: data.account as { id: string; handle: string },
+    };
+  }
+
+  it('enforces assigned role permissions when reading and sending messages', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const { token: ownerToken } = await getAuth(app);
+    const { token: memberToken, account: memberAccount } = await getAuth(app);
+
+    const communityRes = await app.inject({
+      method: 'POST',
+      url: '/v1/communities',
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { name: 'Permission Guild' },
+    });
+    const communityId = communityRes.json().id;
+    await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/join`,
+      headers: { authorization: `Bearer ${memberToken}` },
+    });
+    const channelRes = await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/channels`,
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { name: 'general', kind: 'text', category: 'Chat' },
+    });
+    const channelId = channelRes.json().id;
+    const roleRes = await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/roles`,
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: {
+        name: 'Restricted',
+        permissions: [
+          { permission: 'message.send', effect: 'deny' },
+          { permission: 'message.read', effect: 'deny' },
+        ],
+      },
+    });
+    const roleId = roleRes.json().id;
+    await app.inject({
+      method: 'PUT',
+      url: `/v1/communities/${communityId}/members/${memberAccount.id}/roles/${roleId}`,
+      headers: { authorization: `Bearer ${ownerToken}` },
+    });
+
+    const deniedSend = await app.inject({
+      method: 'POST',
+      url: `/v1/channels/${channelId}/messages`,
+      headers: {
+        authorization: `Bearer ${memberToken}`,
+        'idempotency-key': 'restricted-attempt-1',
+      },
+      payload: { content: 'This must not be stored.', clientNonce: 'restricted-1' },
+    });
+    expect(deniedSend.statusCode).toBe(403);
+    expect(deniedSend.json().detail).toContain('Denied by role');
+
+    const deniedRead = await app.inject({
+      method: 'GET',
+      url: `/v1/channels/${channelId}/messages`,
+      headers: { authorization: `Bearer ${memberToken}` },
+    });
+    expect(deniedRead.statusCode).toBe(403);
+
+    await app.inject({
+      method: 'DELETE',
+      url: `/v1/communities/${communityId}/members/${memberAccount.id}/roles/${roleId}`,
+      headers: { authorization: `Bearer ${ownerToken}` },
+    });
+    const allowedSend = await app.inject({
+      method: 'POST',
+      url: `/v1/channels/${channelId}/messages`,
+      headers: {
+        authorization: `Bearer ${memberToken}`,
+        'idempotency-key': 'allowed-attempt-0001',
+      },
+      payload: { content: 'Permission restored.', clientNonce: 'allowed-1' },
+    });
+    expect(allowedSend.statusCode).toBe(201);
+    expect(allowedSend.json().author.id).toBe(memberAccount.id);
+
+    const allowedRead = await app.inject({
+      method: 'GET',
+      url: `/v1/channels/${channelId}/messages`,
+      headers: { authorization: `Bearer ${memberToken}` },
+    });
+    expect(allowedRead.statusCode).toBe(200);
+    expect(allowedRead.json().items).toHaveLength(1);
+  });
+
+  it('requires authentication for community-channel messages', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const { token: ownerToken } = await getAuth(app);
+    const communityRes = await app.inject({
+      method: 'POST',
+      url: '/v1/communities',
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { name: 'Private Messages' },
+    });
+    const channelRes = await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityRes.json().id}/channels`,
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { name: 'general', kind: 'text', category: 'Chat' },
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/v1/channels/${channelRes.json().id}/messages`,
+      headers: { 'idempotency-key': 'unauthenticated-1' },
+      payload: { content: 'No access.', clientNonce: 'unauthenticated-1' },
+    });
+    expect(response.statusCode).toBe(401);
+  });
+});
+
+describe('invite API', () => {
+  async function getAuth(app: Awaited<ReturnType<typeof buildApp>>) {
+    const email = `user-${crypto.randomUUID()}@test.cove.chat`;
+    const sendRes = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/email/send-code',
+      payload: { email },
+    });
+    const { challengeId } = sendRes.json();
+    const verifyRes = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/email/verify',
+      payload: { email, code: '123456', challengeId },
+    });
+    const data = verifyRes.json();
+    return {
+      token: data.sessionToken as string,
+      account: data.account as { id: string; handle: string },
+    };
+  }
+
+  it('creates an invite and lists invites', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const { token } = await getAuth(app);
+
+    const createRes = await app.inject({
+      method: 'POST',
+      url: '/v1/communities',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 'Test Guild' },
+    });
+    const communityId = createRes.json().id;
+
+    const inviteRes = await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/invites`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { maxUses: 5 },
+    });
+    expect(inviteRes.statusCode).toBe(201);
+    const { invite, url } = inviteRes.json();
+    expect(invite.communityId).toBe(communityId);
+    expect(invite.code).toBeDefined();
+    expect(invite.code.length).toBe(8);
+    expect(url).toContain(invite.code);
+
+    const listRes = await app.inject({
+      method: 'GET',
+      url: `/v1/communities/${communityId}/invites`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(listRes.statusCode).toBe(200);
+    const { invites } = listRes.json();
+    expect(invites.length).toBe(1);
+    expect(invites[0].id).toBe(invite.id);
+  });
+
+  it('joins a community via invite', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const { token: ownerToken } = await getAuth(app);
+    const { token: memberToken } = await getAuth(app);
+
+    const createRes = await app.inject({
+      method: 'POST',
+      url: '/v1/communities',
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { name: 'Invite Guild' },
+    });
+    const communityId = createRes.json().id;
+
+    const inviteRes = await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/invites`,
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: {},
+    });
+    const { invite } = inviteRes.json();
+
+    const joinRes = await app.inject({
+      method: 'POST',
+      url: `/v1/invites/${invite.code}`,
+      headers: { authorization: `Bearer ${memberToken}` },
+    });
+    expect(joinRes.statusCode).toBe(204);
+
+    const listRes = await app.inject({
+      method: 'GET',
+      url: '/v1/communities',
+      headers: { authorization: `Bearer ${memberToken}` },
+    });
+    expect(listRes.json().communities.length).toBe(1);
+    expect(listRes.json().communities[0].id).toBe(communityId);
+  });
+
+  it('rejects invite reuse after max uses', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const { token: ownerToken } = await getAuth(app);
+    const { token: memberToken1 } = await getAuth(app);
+    const { token: memberToken2 } = await getAuth(app);
+
+    const createRes = await app.inject({
+      method: 'POST',
+      url: '/v1/communities',
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { name: 'Limited Guild' },
+    });
+    const communityId = createRes.json().id;
+
+    const inviteRes = await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/invites`,
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { maxUses: 1 },
+    });
+    const { invite } = inviteRes.json();
+
+    await app.inject({
+      method: 'POST',
+      url: `/v1/invites/${invite.code}`,
+      headers: { authorization: `Bearer ${memberToken1}` },
+    });
+
+    const joinRes2 = await app.inject({
+      method: 'POST',
+      url: `/v1/invites/${invite.code}`,
+      headers: { authorization: `Bearer ${memberToken2}` },
+    });
+    expect(joinRes2.statusCode).toBe(429);
+  });
+
+  it('rejects invite creation by non-admin members', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const { token: ownerToken } = await getAuth(app);
+    const { token: memberToken } = await getAuth(app);
+
+    const createRes = await app.inject({
+      method: 'POST',
+      url: '/v1/communities',
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { name: 'Restricted Guild' },
+    });
+    const communityId = createRes.json().id;
+
+    await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/join`,
+      headers: { authorization: `Bearer ${memberToken}` },
+    });
+
+    const inviteRes = await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/invites`,
+      headers: { authorization: `Bearer ${memberToken}` },
+      payload: {},
+    });
+    expect(inviteRes.statusCode).toBe(403);
+  });
+
+  it('hides invite codes from members and supports revocation', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const { token: ownerToken } = await getAuth(app);
+    const { token: memberToken } = await getAuth(app);
+    const { token: outsiderToken } = await getAuth(app);
+
+    const communityRes = await app.inject({
+      method: 'POST',
+      url: '/v1/communities',
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { name: 'Revocable Invites' },
+    });
+    const communityId = communityRes.json().id;
+    await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/join`,
+      headers: { authorization: `Bearer ${memberToken}` },
+    });
+    const inviteRes = await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/invites`,
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { expiresInSeconds: 300 },
+    });
+    const { invite } = inviteRes.json();
+
+    const memberList = await app.inject({
+      method: 'GET',
+      url: `/v1/communities/${communityId}/invites`,
+      headers: { authorization: `Bearer ${memberToken}` },
+    });
+    expect(memberList.statusCode).toBe(403);
+
+    const revokeRes = await app.inject({
+      method: 'DELETE',
+      url: `/v1/communities/${communityId}/invites/${invite.id}`,
+      headers: { authorization: `Bearer ${ownerToken}` },
+    });
+    expect(revokeRes.statusCode).toBe(204);
+
+    const acceptRes = await app.inject({
+      method: 'POST',
+      url: `/v1/invites/${invite.code}`,
+      headers: { authorization: `Bearer ${outsiderToken}` },
+    });
+    expect(acceptRes.statusCode).toBe(404);
   });
 });

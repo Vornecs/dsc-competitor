@@ -258,6 +258,85 @@ export const createChannelRequestSchema = z.object({
 });
 export type CreateChannelRequest = z.infer<typeof createChannelRequestSchema>;
 
+export const rolePermissionSchema = z.object({
+  permission: z.string().trim().min(1).max(64),
+  effect: z.enum(['allow', 'deny']),
+});
+export type RolePermission = z.infer<typeof rolePermissionSchema>;
+
+export const roleSchema = z.object({
+  id: z.string().min(1),
+  communityId: z.string().min(1),
+  name: z.string().min(1).max(64),
+  description: z.string().max(256).optional(),
+  color: z
+    .string()
+    .regex(/^#[0-9a-fA-F]{6}$/)
+    .optional(),
+  hoist: z.boolean().default(false),
+  mentionable: z.boolean().default(false),
+  managed: z.boolean().default(false),
+  permissions: z.array(rolePermissionSchema).default([]),
+  createdAt: z.string().datetime(),
+});
+export type Role = z.infer<typeof roleSchema>;
+
+export const createRoleRequestSchema = z.object({
+  name: z.string().trim().min(1).max(64),
+  description: z.string().max(256).optional(),
+  color: z
+    .string()
+    .regex(/^#[0-9a-fA-F]{6}$/)
+    .optional(),
+  hoist: z.boolean().optional(),
+  mentionable: z.boolean().optional(),
+  permissions: z.array(rolePermissionSchema).max(64).optional(),
+});
+export type CreateRoleRequest = z.infer<typeof createRoleRequestSchema>;
+
+export const updateRoleRequestSchema = z.object({
+  name: z.string().trim().min(1).max(64).optional(),
+  description: z.string().max(256).optional().nullable(),
+  color: z
+    .string()
+    .regex(/^#[0-9a-fA-F]{6}$/)
+    .optional()
+    .nullable(),
+  hoist: z.boolean().optional(),
+  mentionable: z.boolean().optional(),
+  permissions: z.array(rolePermissionSchema).max(64).optional(),
+});
+export type UpdateRoleRequest = z.infer<typeof updateRoleRequestSchema>;
+
+export const inviteSchema = z.object({
+  id: z.string().min(1),
+  communityId: z.string().min(1),
+  code: z.string().min(1),
+  createdBy: z.string().min(1),
+  createdAt: z.string().datetime(),
+  expiresAt: z.string().datetime(),
+  maxUses: z.number().int().positive().nullable(),
+  uses: z.number().int().nonnegative(),
+});
+export type Invite = z.infer<typeof inviteSchema>;
+
+export const createInviteRequestSchema = z.object({
+  maxUses: z.number().int().min(1).max(1_000).optional(),
+  expiresInSeconds: z
+    .number()
+    .int()
+    .min(300)
+    .max(30 * 24 * 60 * 60)
+    .optional(),
+});
+export type CreateInviteRequest = z.infer<typeof createInviteRequestSchema>;
+
+export const inviteResponseSchema = z.object({
+  invite: inviteSchema,
+  url: z.string().min(1),
+});
+export type InviteResponse = z.infer<typeof inviteResponseSchema>;
+
 export const permissionRuleSchema = z.object({
   subject: z.enum(['base', 'role', 'member']),
   subjectId: z.string().optional(),

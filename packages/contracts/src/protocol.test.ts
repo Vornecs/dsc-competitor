@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   channelPrivacyPolicySchema,
+  createInviteRequestSchema,
+  createRoleRequestSchema,
   demoBootstrap,
   gatewayServerFrameSchema,
   resolvePermission,
@@ -72,5 +74,20 @@ describe('permission precedence', () => {
 
     expect(decision.allowed).toBe(false);
     expect(decision.explanation).toContain('owners');
+  });
+});
+
+describe('role and invite contracts', () => {
+  it('bounds role permissions and invite lifetime inputs', () => {
+    expect(
+      createRoleRequestSchema.safeParse({
+        name: 'Muted',
+        permissions: [{ permission: 'message.send', effect: 'deny' }],
+      }).success,
+    ).toBe(true);
+    expect(createRoleRequestSchema.safeParse({ name: '   ' }).success).toBe(false);
+    expect(createInviteRequestSchema.safeParse({ expiresInSeconds: 300 }).success).toBe(true);
+    expect(createInviteRequestSchema.safeParse({ expiresInSeconds: 30 }).success).toBe(false);
+    expect(createInviteRequestSchema.safeParse({ maxUses: 1_001 }).success).toBe(false);
   });
 });
