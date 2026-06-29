@@ -1,0 +1,30 @@
+{
+  "name": "competitor",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "services/*",
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "npm run build -w @competitor/contracts && npm run build -w @competitor/ui && concurrently -n core,web -c magenta,cyan \"npm run dev -w @competitor/core\" \"npm run dev -w @competitor/web\"",
+    "build": "npm run build -w @competitor/contracts && npm run build -w @competitor/ui && npm run build -w @competitor/core && npm run build -w @competitor/web",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "format:check": "prettier --check .",
+    "format": "prettier --write ."
+  },
+  "devDependencies": {
+    "@types/node": "latest",
+    "concurrently": "latest",
+    "prettier": "latest",
+    "tsx": "latest",
+    "typescript": "latest",
+    "vitest": "latest"
+  }
+}
