@@ -1,10 +1,10 @@
 # Cove Product Plan
 
-> Last updated: 2026-06-29 | Cycle: 5 | Phase: 1 — Core Features | Build health: verified; Passkey/email auth + device sessions implemented and verified
+> Last updated: 2026-06-29 | Cycle: 6 | Phase: 1 — Core Features | Build health: verified; Communities, channels, memberships, and permission simulator implemented and verified
 >
-> Current objective: Cycle 5 implemented passkey/email authentication and device sessions, with in-memory auth states, session validation token-based requireAuth helpers, and 100% test coverage.
+> Current objective: Cycle 6 implemented community CRUD, channel CRUD, membership join/leave, and permission simulator endpoint, with in-memory stores, auth-gated endpoints, and 12 core tests.
 >
-> Next gate: implement accounts, communities, memberships, roles, channels, invites, and permission simulator.
+> Next gate: implement roles, invites, permission-dependent message routing, and PostgreSQL persistence migration.
 
 This file is the authoritative product, architecture, and delivery record. A behavior or scope change is incomplete until this file is reconciled in the same work cycle.
 
@@ -160,13 +160,14 @@ Administrator bypass never applies to ownership, billing, security, or private m
 | P0-007 | implemented | Desktop/media gate              | Both shell candidates evaluated against capture/PTT/device/performance criteria.                                            | Electron harness, 3 gate tests, renderer smoke, and dated preflight evidence pass; PTT adapter wired through preload bridge + harness UI; uiohook-napi installed + rebuilt against Electron 42 ABI; press/release IPC probe and capture/audio/soak measurements remain blocked on interactive Windows session. |
 | P0-008 | implemented | Initial cost model              | Bandwidth, media, storage, support, and abuse-cost assumptions produce sensitivity ranges and beta telemetry requirements.  | docs/architecture/COST_MODEL.md: sensitivity ranges across 10/50/200 DAU; media dominates; 6 beta telemetry requirements; pricing deferral criteria match D-006.                                                                                                                                               |
 | P1-001 | verified    | Passkey & email auth / sessions | Email request/verify codes, WebAuthn options/verification, device session lists/revocation.                                 | Vitest integration test covers email verify/retry, registration/login options, session listing, and revocation.                                                                                                                                                                                                |
+| P1-002 | verified    | Communities, channels, memberships, permission simulator | Community CRUD, channel CRUD within communities, join/leave membership, owner-leave guard, permission simulator endpoint. | 12 core tests pass: community create/list/get, membership join/leave, channel create/list, permission simulator precedence/owner-only. Typecheck, build, format clean. 0 production vulns.                                                                                                                    |
 
 ## Quality dashboard
 
 | Area             | Current          | Gate                                                                                                                                                                    |
 | ---------------- | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Install          | verified         | `npm install` completed and generated a locked workspace graph.                                                                                                         |
-| Unit tests       | verified         | 26 tests pass: 4 web, 4 core transport/auth, 4 contract/permission, 3 desktop-gate tests, and 11 PTT-adapter tests.                                                     |
+| Unit tests       | verified         | 34 tests pass: 4 web, 12 core (transport/auth/community/channel/permission), 4 contract/permission, 3 desktop-gate tests, and 11 PTT-adapter tests.                                                     |
 | Type safety      | verified         | All five workspaces pass strict TypeScript.                                                                                                                             |
 | Production build | verified         | Client output is 85.54 kB gzip JavaScript and 4.20 kB gzip CSS.                                                                                                         |
 | API integration  | verified         | Health, bootstrap, mutation, gateway, authentication routes, device sessions, integrated HTML, and assets pass.                                                         |
@@ -237,9 +238,14 @@ Administrator bypass never applies to ownership, billing, security, or private m
 - Browser limitation: the in-app browser URL policy still blocks leaving its internal network-error data page; P0-005 remains implemented rather than verified.
 - Next: run the interactive harness to verify PTT press/release IPC end-to-end (probe → register key → press/release events → unregister); run user-consented capture/audio/hot-plug and soak measurements; unblock P0-005 browser QA when URL policy permits.
 
-### Cycle 5 — 2026-06-29 — completed
+### Cycle 6 — 2026-06-29 — completed
 
-- Objective: implement the first unblocked Phase 1 milestone: passkey/email authentication and device session management.
-- Delivered: email code requests, email code verification (supporting custom handles and automatic account creation), WebAuthn registration options/verification, WebAuthn assertion login options/verification, session validation via token authorization headers, active device session lists, and device session revocation.
-- Verification: 26 tests pass (added 1 comprehensive auth/session integration test in core covering all 10 success/failure stages); project-wide type checking passes; production build completes successfully; Prettier clean; 0 production vulnerabilities.
-- Next: implement accounts, communities, memberships, roles, channels, invites, and permission simulator.
+- Objective: implement the first foundational Phase 1 social-structure slice: communities, channels, memberships, and permission simulator.
+- Delivered: `createCommunityRequestSchema`, `createChannelRequestSchema`, `permissionSimulatorRequestSchema`, and `permissionDecisionSchema` in `@cove/contracts`.
+- Delivered: in-memory stores for communities, memberships, and dynamic channels in `services/core/src/app.ts`.
+- Delivered: authenticated endpoints — POST /v1/communities, GET /v1/communities, GET /v1/communities/:id, POST /v1/communities/:id/join, DELETE /v1/communities/:id/members/:memberId (with `me` alias), POST /v1/communities/:id/channels, GET /v1/communities/:id/channels.
+- Delivered: POST /v1/permissions/simulate endpoint that wires the existing `resolvePermission` engine with zod-validated requests.
+- Behavior: community creator becomes owner; only owners/admins can create channels; owners cannot leave communities that still have other members without transferring ownership; empty communities are auto-deleted on last member leave.
+- Verification: 34 tests pass (12 core + 4 web + 14 desktop + 4 contracts); strict TypeScript across all 5 workspaces; production build 85.95 kB gzip JS / 4.20 kB gzip CSS; Prettier clean; 0 production vulnerabilities.
+- Limitation: communities and channels remain in-memory; the web client bootstrap still returns demo data until the UI is wired to the new authenticated endpoints in a future cycle.
+- Next: implement roles, invites, permission-dependent message routing, and begin PostgreSQL persistence migration.

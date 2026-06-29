@@ -239,6 +239,52 @@ export const passkeyLoginVerifySchema = z.object({
 });
 export type PasskeyLoginVerify = z.infer<typeof passkeyLoginVerifySchema>;
 
+export const createCommunityRequestSchema = z.object({
+  name: z.string().min(1).max(80),
+  mark: z.string().min(1).max(3).optional(),
+  accent: z
+    .string()
+    .regex(/^#[0-9a-fA-F]{6}$/)
+    .optional(),
+});
+export type CreateCommunityRequest = z.infer<typeof createCommunityRequestSchema>;
+
+export const createChannelRequestSchema = z.object({
+  name: z.string().min(1).max(80),
+  kind: z.enum(['text', 'voice']),
+  category: z.string().min(1).max(80),
+  topic: z.string().max(240).optional(),
+  privacy: channelPrivacyPolicySchema.optional(),
+});
+export type CreateChannelRequest = z.infer<typeof createChannelRequestSchema>;
+
+export const permissionRuleSchema = z.object({
+  subject: z.enum(['base', 'role', 'member']),
+  subjectId: z.string().optional(),
+  permission: z.string().min(1),
+  effect: z.enum(['allow', 'deny']),
+});
+export type PermissionRuleInput = z.infer<typeof permissionRuleSchema>;
+
+export const permissionSimulatorRequestSchema = z.object({
+  permission: z.string().min(1),
+  memberId: z.string().min(1),
+  roleIds: z.array(z.string().min(1)),
+  isOwner: z.boolean(),
+  isAdministrator: z.boolean(),
+  rules: z.array(permissionRuleSchema),
+  ownerOnly: z.boolean().optional(),
+  administratorBypassAllowed: z.boolean().optional(),
+});
+export type PermissionSimulatorRequest = z.infer<typeof permissionSimulatorRequestSchema>;
+
+export const permissionDecisionSchema = z.object({
+  allowed: z.boolean(),
+  source: z.string().min(1),
+  explanation: z.string().min(1),
+});
+export type PermissionDecisionResult = z.infer<typeof permissionDecisionSchema>;
+
 export const deviceSessionSchema = z.object({
   id: z.string().min(1),
   deviceName: z.string().min(1),
