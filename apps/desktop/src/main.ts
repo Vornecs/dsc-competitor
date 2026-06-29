@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { cpus, release as osRelease, totalmem, version as osVersion } from 'node:os';
+import { probePttBackend, pttAdapter } from './ptt-adapter.js';
 
 const processStartedAt = performance.now();
 const directory = path.dirname(fileURLToPath(import.meta.url));
@@ -71,6 +72,19 @@ function installIpc() {
   ipcMain.handle('gate:unregister-shortcut', () => {
     if (registeredAccelerator) globalShortcut.unregister(registeredAccelerator);
     registeredAccelerator = null;
+  });
+
+  ipcMain.handle('gate:probe-ptt', async () => probePttBackend());
+
+  ipcMain.handle('gate:register-ptt-key', async (_event, keyCode: unknown) => {
+    if (typeof keyCode !== 'number' || !Number.isInteger(keyCode)) return false;
+    return pttAdapter.register(keyCode, (pttEvent) => {
+      mainWindow?.webContents.send('gate:ptt-event', pttEvent);
+    });
+  });
+
+  ipcMain.handle('gate:unregister-ptt-key', () => {
+    pttAdapter.unregister();
   });
 
   ipcMain.handle('gate:sample-process', async () => {

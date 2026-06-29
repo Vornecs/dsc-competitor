@@ -7,5 +7,11 @@
     "rootDir": "./src",
     "types": ["node"]
   },
-  "include": ["src/main.ts", "src/gate.ts", "src/gate.test.ts"]
+  "include": [
+    "src/main.ts",
+    "src/gate.ts",
+    "src/gate.test.ts",
+    "src/ptt-adapter.ts",
+    "src/ptt-adapter.test.ts"
+  ]
 }
