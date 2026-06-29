@@ -1,8 +1,4 @@
-import {
-  bootstrapStateSchema,
-  gatewayServerFrameSchema,
-  messageSchema,
-} from '@competitor/contracts';
+import { bootstrapStateSchema, gatewayServerFrameSchema, messageSchema } from '@cove/contracts';
 import { afterEach, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
 import { buildApp } from './app.js';
@@ -20,7 +16,7 @@ describe('core HTTP API', () => {
 
     const health = await app.inject({ method: 'GET', url: '/v1/health' });
     expect(health.statusCode).toBe(200);
-    expect(health.json()).toMatchObject({ status: 'ok', service: 'competitor-core' });
+    expect(health.json()).toMatchObject({ status: 'ok', service: 'cove-core' });
 
     const bootstrap = await app.inject({ method: 'GET', url: '/v1/bootstrap' });
     expect(bootstrap.statusCode).toBe(200);

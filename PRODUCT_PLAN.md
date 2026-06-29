@@ -1,10 +1,10 @@
 # Cove Product Plan
 
-> Last updated: 2026-06-29 | Cycle: 3 | Phase: 0 — Foundation | Build health: verified; PTT adapter spike complete, cost model initial draft complete
+> Last updated: 2026-06-29 | Cycle: 4 | Phase: 0 — Foundation | Build health: verified; PTT IPC bridge + harness UI wired, uiohook-napi installed + rebuilt
 >
-> Current objective: Cycle 3 spiked the Electron PTT adapter (press/release via uiohook-napi DI pattern) and produced the initial P0-008 cost model.
+> Current objective: Cycle 4 wired the PTT adapter through the preload bridge and harness UI, installed uiohook-napi with electron-rebuild against Electron 42 ABI, and completed the @competitor → @cove project rename.
 >
-> Next gate: install uiohook-napi + electron-rebuild in the desktop workspace and run the permission-dependent PTT and capture/audio/soak measurements; advance the UI QA unblock.
+> Next gate: run the interactive harness to verify PTT press/release IPC end-to-end, capture/audio device, and soak measurements; advance the UI QA unblock when browser policy permits.
 
 This file is the authoritative product, architecture, and delivery record. A behavior or scope change is incomplete until this file is reconciled in the same work cycle.
 
@@ -157,7 +157,7 @@ Administrator bypass never applies to ownership, billing, security, or private m
 | P0-004 | verified    | Core transport spike       | Health/bootstrap routes and gateway READY/heartbeat/event behavior run locally.                                             | 3 API/WebSocket tests and integrated runtime probes pass.                                                                                                                               |
 | P0-005 | implemented | Polished application shell | Four-region layout, density/theme controls, privacy card, messaging composition, and responsive behavior render accessibly. | 4 semantic/state UI tests and build pass; browser QA is policy-blocked.                                                                                                                 |
 | P0-006 | verified    | Research kit               | Interview guide, survey, consent script, and synthesis rubric exist.                                                        | Structure reviewed; participant sessions remain external.                                                                                                                               |
-| P0-007 | implemented | Desktop/media gate         | Both shell candidates evaluated against capture/PTT/device/performance criteria.                                            | Electron harness, 3 gate tests, renderer smoke, and dated preflight evidence pass; PTT adapter spike complete (uiohook-napi DI); full permission-dependent measurements remain blocked. |
+| P0-007 | implemented | Desktop/media gate         | Both shell candidates evaluated against capture/PTT/device/performance criteria.                                            | Electron harness, 3 gate tests, renderer smoke, and dated preflight evidence pass; PTT adapter wired through preload bridge + harness UI; uiohook-napi installed + rebuilt against Electron 42 ABI; press/release IPC probe and capture/audio/soak measurements remain blocked on interactive Windows session. |
 | P0-008 | implemented | Initial cost model         | Bandwidth, media, storage, support, and abuse-cost assumptions produce sensitivity ranges and beta telemetry requirements.  | docs/architecture/COST_MODEL.md: sensitivity ranges across 10/50/200 DAU; media dominates; 6 beta telemetry requirements; pricing deferral criteria match D-006.                        |
 
 ## Quality dashboard
@@ -166,14 +166,14 @@ Administrator bypass never applies to ownership, billing, security, or private m
 | ---------------- | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
 | Install          | verified         | `npm install` completed and generated a locked workspace graph.                                                                                |
 | Unit tests       | verified         | 25 tests pass: 4 web, 3 core transport, 4 contract/permission, 3 desktop-gate tests, and 11 PTT-adapter tests.                                 |
-| Type safety      | verified         | All four workspaces pass strict TypeScript.                                                                                                    |
+| Type safety      | verified         | All five workspaces pass strict TypeScript.                                                                                                    |
 | Production build | verified         | Client output is 85.54 kB gzip JavaScript and 4.20 kB gzip CSS.                                                                                |
 | API integration  | verified         | Health, bootstrap, mutation, gateway, integrated HTML, and assets pass.                                                                        |
 | Accessibility    | partial          | Semantic UI tests and accessible modes exist; real-browser review remains blocked.                                                             |
-| Performance      | partial          | Electron renderer loaded in 2.392 s once; a 464 MB summed startup working-set snapshot signals risk. Warm/idle p95 and soak remain unmeasured. |
-| Security         | baseline partial | CSP, headers, runtime schemas, redacted logs, threat model, and zero-vulnerability npm audits verified.                                        |
+| Performance      | partial          | Electron renderer loaded in 2.392 s once; a 464 MB summed startup working-set snapshot signals risk. PTT harness UI added; warm/idle p95 and soak remain unmeasured. |
+| Security         | baseline partial | CSP, headers, runtime schemas, redacted logs, threat model, 0 production vulns. 5 high dev-time tar advisories in electron-rebuild dep chain (known issue, build-only). |
 | Reliability      | local only       | Backup/restore and deployment SLOs begin in Phase 1.                                                                                           |
-| Cost             | unmeasured       | Alpha cost model before managed-service commitment.                                                                                            |
+| Cost             | modelled         | Initial cost model (P0-008) exists; real-world telemetry pending managed-service activation.                                                    |
 
 ## Risk register
 
@@ -222,3 +222,16 @@ Administrator bypass never applies to ownership, billing, security, or private m
 - Installation blocker: `npm install uiohook-napi` was denied by auto-mode (untrusted native addon). User must run: `npm install --workspace=apps/desktop uiohook-napi && npx --prefix apps/desktop electron-rebuild -f -w uiohook-napi` before the PTT IPC handlers can activate.
 - Verification: 25 tests pass (11 PTT-adapter + 3 gate + 4 web + 3 core + 4 contracts); strict TypeScript across all workspaces; production build 85.54 kB gzip; format clean.
 - Next: install uiohook-napi with electron-rebuild and run the PTT press/release IPC probe; run user-consented capture/audio/hot-plug and soak measurements; unblock P0-005 browser QA when URL policy permits.
+
+### Cycle 4 — 2026-06-29 — completed
+
+- Objective: wire the PTT adapter through the preload bridge and harness UI, install uiohook-napi with electron-rebuild, and commit the @competitor → @cove project rename.
+- Delivered: `preload.cjs` now exposes `probePtt`, `registerPttKey`, `unregisterPttKey`, and `onPttEvent` to the renderer via contextBridge.
+- Delivered: `harness/src.ts` DesktopGateApi interface extended with `PttProbeResult`, `PttEvent`, and PTT methods; UI logic added for probe, register (with key-code input), unregister, and live event display.
+- Delivered: `harness/index.html` PTT card (05) added between process sample (04) and evidence record (06), with probe button, key-code input (default 67 = F9), register/unregister buttons, and result pre. Warning updated to reference the PTT adapter.
+- Delivered: project rename from `@competitor/*` → `@cove/*` across 13 files (package.json files, imports, lockfile, docs).
+- Native addon: `npm install uiohook-napi` and `electron-rebuild -f -w uiohook-napi` both succeeded; uiohook-napi is now bound to Electron 42 ABI and `require('uiohook-napi')` resolves.
+- Verification: 25 tests pass (14 desktop + 4 web + 3 core + 4 contracts); strict TypeScript across all 5 workspaces; production build 85.54 kB gzip JS / 4.20 kB gzip CSS; formatting clean; 0 production vulnerabilities.
+- uiohook installation note: 5 high severity advisories exist in `tar` (deep dependency of `electron-rebuild` via `node-gyp`); these affect build-time only and are a known issue with old electron-rebuild.
+- Browser limitation: the in-app browser URL policy still blocks leaving its internal network-error data page; P0-005 remains implemented rather than verified.
+- Next: run the interactive harness to verify PTT press/release IPC end-to-end (probe → register key → press/release events → unregister); run user-consented capture/audio/hot-plug and soak measurements; unblock P0-005 browser QA when URL policy permits.

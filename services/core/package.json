@@ -1,5 +1,5 @@
 {
-  "name": "@competitor/core",
+  "name": "@cove/core",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -13,7 +13,7 @@
     "test": "vitest run --pool=threads --maxWorkers=1"
   },
   "dependencies": {
-    "@competitor/contracts": "0.0.0",
+    "@cove/contracts": "0.0.0",
     "@fastify/cors": "latest",
     "@fastify/helmet": "latest",
     "@fastify/websocket": "latest",

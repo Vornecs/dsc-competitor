@@ -5,6 +5,18 @@ interface CaptureSource {
   type: 'screen' | 'window';
 }
 
+interface PttProbeResult {
+  available: boolean;
+  backend: string;
+  reason?: string;
+}
+
+interface PttEvent {
+  type: 'press' | 'release';
+  keyCode: number;
+  occurredAt: string;
+}
+
 interface DesktopGateApi {
   environment(): Promise<Record<string, string | number>>;
   listCaptureSources(): Promise<CaptureSource[]>;
@@ -13,6 +25,10 @@ interface DesktopGateApi {
   unregisterShortcut(): Promise<void>;
   sampleProcess(): Promise<unknown>;
   onShortcutTrigger(listener: (payload: unknown) => void): () => void;
+  probePtt(): Promise<PttProbeResult>;
+  registerPttKey(keyCode: number): Promise<boolean>;
+  unregisterPttKey(): Promise<void>;
+  onPttEvent(listener: (event: PttEvent) => void): () => void;
 }
 
 declare global {
@@ -121,6 +137,46 @@ window.desktopGate.onShortcutTrigger((payload) => {
   show('shortcut-result', record.shortcut);
 });
 
+element('probe-ptt').addEventListener('click', async () => {
+  const result = await window.desktopGate.probePtt();
+  record.pttProbe = result;
+  if (result.available) {
+    element<HTMLButtonElement>('register-ptt').disabled = false;
+  }
+  show('ptt-result', result);
+});
+
+let pttUnlisten: (() => void) | null = null;
+element('register-ptt').addEventListener('click', async () => {
+  const keyCode = parseInt(element<HTMLInputElement>('ptt-key').value, 10);
+  if (Number.isNaN(keyCode) || keyCode <= 0) return;
+  if (pttUnlisten) pttUnlisten();
+  const registered = await window.desktopGate.registerPttKey(keyCode);
+  if (!registered) {
+    record.ptt = { registered: false, keyCode, reason: 'Backend unavailable — see probe result.' };
+    show('ptt-result', record.ptt);
+    return;
+  }
+  pttUnlisten = window.desktopGate.onPttEvent((event: PttEvent) => {
+    record.ptt = { registered: true, keyCode, lastEvent: event };
+    show('ptt-result', record.ptt);
+  });
+  record.ptt = { registered: true, keyCode };
+  show('ptt-result', record.ptt);
+  element<HTMLButtonElement>('unregister-ptt').disabled = false;
+});
+
+element('unregister-ptt').addEventListener('click', () => {
+  window.desktopGate.unregisterPttKey();
+  if (pttUnlisten) {
+    pttUnlisten();
+    pttUnlisten = null;
+  }
+  record.ptt = { registered: false };
+  show('ptt-result', record.ptt);
+  element<HTMLButtonElement>('unregister-ptt').disabled = true;
+});
+
 element('sample-process').addEventListener('click', async () => {
   record.processSample = await window.desktopGate.sampleProcess();
   show('process-result', record.processSample);
@@ -131,4 +187,7 @@ element('copy-report').addEventListener('click', async () => {
   element('copy-status').textContent = 'Copied';
 });
 
-window.addEventListener('beforeunload', () => void window.desktopGate.unregisterShortcut());
+window.addEventListener('beforeunload', () => {
+  void window.desktopGate.unregisterShortcut();
+  void window.desktopGate.unregisterPttKey();
+});

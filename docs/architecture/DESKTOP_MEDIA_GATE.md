@@ -39,7 +39,7 @@ Official references:
 ## Run the Electron harness
 
 ```powershell
-rtk npm run harness -w @competitor/desktop
+rtk npm run harness -w @cove/desktop
 ```
 
 The harness never grants display capture without a user gesture and explicit source selection. It exposes only narrow IPC methods through a sandboxed, context-isolated preload.

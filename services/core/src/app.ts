@@ -12,7 +12,7 @@ import {
   type GatewayServerFrame,
   type Message,
   type ProblemDetail,
-} from '@competitor/contracts';
+} from '@cove/contracts';
 import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify';
 import type { WebSocket } from 'ws';
 
@@ -26,7 +26,7 @@ function problem(
   instance?: string,
 ) {
   const body: ProblemDetail = {
-    type: `https://competitor.invalid/problems/${title.toLowerCase().replaceAll(' ', '-')}`,
+    type: `https://cove.invalid/problems/${title.toLowerCase().replaceAll(' ', '-')}`,
     title,
     status,
     detail,
@@ -106,7 +106,7 @@ export async function buildApp(): Promise<FastifyInstance> {
 
   app.get('/v1/health', async () => ({
     status: 'ok',
-    service: 'competitor-core',
+    service: 'cove-core',
     version: '0.0.0',
     time: new Date().toISOString(),
   }));

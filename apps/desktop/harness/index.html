@@ -92,11 +92,36 @@
           </div>
           <pre id="process-result">No process measurement.</pre>
         </section>
+
+        <section class="card">
+          <header>
+            <span>05</span>
+            <div>
+              <h2>Push-to-talk adapter</h2>
+              <p>
+                Probe the native PTT backend, register a key, and verify distinct press/release
+                events.
+              </p>
+            </div>
+          </header>
+          <div class="row">
+            <button id="probe-ptt" type="button">Probe backend</button>
+            <input
+              id="ptt-key"
+              value="67"
+              aria-label="PTT key code (e.g. 67 = F9)"
+              title="uiohook key code (e.g. 67 = F9, 56 = Alt, 29 = Ctrl)"
+            />
+            <button id="register-ptt" class="primary" type="button" disabled>Register PTT</button>
+            <button id="unregister-ptt" type="button" disabled>Unregister</button>
+          </div>
+          <pre id="ptt-result">Probe the backend first.</pre>
+        </section>
       </div>
 
       <section class="card report-card">
         <header>
-          <span>05</span>
+          <span>06</span>
           <div>
             <h2>Evidence record</h2>
             <p>Copy this record into the candidate evidence file with manual observations.</p>

@@ -6,8 +6,8 @@ import {
   type BootstrapState,
   type Channel,
   type Message,
-} from '@competitor/contracts';
-import { Avatar, IconButton, StatusPill } from '@competitor/ui';
+} from '@cove/contracts';
+import { Avatar, IconButton, StatusPill } from '@cove/ui';
 import {
   Bell,
   ChevronDown,

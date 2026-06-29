@@ -40,9 +40,9 @@ Process working-set snapshot: Browser 108 MB, GPU 101 MB, Utility 50 MB, Tab 78 
 ## Reproduction
 
 ```powershell
-rtk npm run preflight -w @competitor/desktop
-rtk npm run smoke -w @competitor/desktop
-rtk npm run harness -w @competitor/desktop
+rtk npm run preflight -w @cove/desktop
+rtk npm run smoke -w @cove/desktop
+rtk npm run harness -w @cove/desktop
 ```
 
 The interactive harness is required for user-consented screen, system-audio, microphone, and hot-plug measurements. Do not convert a partial signal above into a pass.

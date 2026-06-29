@@ -1,4 +1,4 @@
-# Competitor
+# Cove
 
 A gaming-first community communication platform focused on dependable voice, stable and accessible UI, explainable moderation, layered privacy, and portable community data.
 
@@ -27,7 +27,7 @@ To inspect the production build through the same origin as the API and realtime 
 
 ```powershell
 npm run build
-npm run preview -w @competitor/core
+npm run preview -w @cove/core
 ```
 
 Then open `http://127.0.0.1:8790`.
@@ -37,9 +37,9 @@ Then open `http://127.0.0.1:8790`.
 The shell choice remains open. Run the Electron control candidate to measure display capture, system audio, device hot-plug, shortcuts, startup, and resource use:
 
 ```powershell
-npm run preflight -w @competitor/desktop
-npm run smoke -w @competitor/desktop
-npm run harness -w @competitor/desktop
+npm run preflight -w @cove/desktop
+npm run smoke -w @cove/desktop
+npm run harness -w @cove/desktop
 ```
 
 The automated commands do not grant media permissions. The interactive harness requires explicit source/device choices and explains which observations are partial. See [the gate specification](./docs/architecture/DESKTOP_MEDIA_GATE.md).

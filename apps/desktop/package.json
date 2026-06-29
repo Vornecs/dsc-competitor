@@ -13,7 +13,7 @@
     "test": "vitest run --configLoader native --config vitest.config.ts --pool=threads --maxWorkers=1"
   },
   "dependencies": {
-    "uiohook-napi": "^1.5.3"
+    "uiohook-napi": "1.5.5"
   },
   "devDependencies": {
     "electron": "42.5.1",

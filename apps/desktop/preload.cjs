@@ -12,4 +12,12 @@ contextBridge.exposeInMainWorld('desktopGate', {
     ipcRenderer.on('gate:shortcut-trigger', handler);
     return () => ipcRenderer.removeListener('gate:shortcut-trigger', handler);
   },
+  probePtt: () => ipcRenderer.invoke('gate:probe-ptt'),
+  registerPttKey: (keyCode) => ipcRenderer.invoke('gate:register-ptt-key', keyCode),
+  unregisterPttKey: () => ipcRenderer.invoke('gate:unregister-ptt-key'),
+  onPttEvent: (listener) => {
+    const handler = (_event, payload) => listener(payload);
+    ipcRenderer.on('gate:ptt-event', handler);
+    return () => ipcRenderer.removeListener('gate:ptt-event', handler);
+  },
 });
