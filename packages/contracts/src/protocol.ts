@@ -39,12 +39,16 @@ export const presenceUpdateSchema = z.object({
 });
 export type PresenceUpdate = z.infer<typeof presenceUpdateSchema>;
 
-export const participantSchema = accountSchema.pick({
-  id: true,
-  displayName: true,
-  initials: true,
-  status: true,
-});
+export const participantSchema = accountSchema
+  .pick({
+    id: true,
+    displayName: true,
+    initials: true,
+    status: true,
+  })
+  .extend({
+    participantRole: z.enum(['speaker', 'listener']).optional(),
+  });
 export type Participant = z.infer<typeof participantSchema>;
 
 export const stageConfigSchema = z.object({
@@ -372,6 +376,8 @@ export const createChannelRequestSchema = z.object({
   category: z.string().min(1).max(80),
   topic: z.string().max(240).optional(),
   privacy: channelPrivacyPolicySchema.optional(),
+  parentChannelId: z.string().min(1).optional(),
+  stageConfig: stageConfigSchema.optional(),
 });
 export type CreateChannelRequest = z.infer<typeof createChannelRequestSchema>;
 
@@ -380,8 +386,35 @@ export const voiceSessionSchema = z.object({
   url: z.string().min(1),
   roomName: z.string().min(1),
   participantId: z.string().min(1),
+  participantRole: z.enum(['speaker', 'listener']).optional(),
 });
 export type VoiceSession = z.infer<typeof voiceSessionSchema>;
+
+export const stageParticipantsSchema = z.object({
+  channelId: z.string().min(1),
+  speakers: z.array(participantSchema),
+  listeners: z.array(participantSchema),
+  screenShares: z.array(
+    z.object({
+      participantId: z.string().min(1),
+      trackId: z.string().min(1),
+    }),
+  ),
+});
+export type StageParticipants = z.infer<typeof stageParticipantsSchema>;
+
+export const screenShareStartedSchema = z.object({
+  channelId: z.string().min(1),
+  participantId: z.string().min(1),
+  trackId: z.string().min(1),
+});
+export type ScreenShareStarted = z.infer<typeof screenShareStartedSchema>;
+
+export const screenShareEndedSchema = z.object({
+  channelId: z.string().min(1),
+  participantId: z.string().min(1),
+});
+export type ScreenShareEnded = z.infer<typeof screenShareEndedSchema>;
 
 export const voiceParticipantJoinedSchema = z.object({
   channelId: z.string().min(1),

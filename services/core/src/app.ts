@@ -30,6 +30,7 @@ import {
   banMemberRequestSchema,
   banSchema,
   communityExportSchema,
+  stageParticipantsSchema,
   type Attachment,
   type AttentionItem,
   type BootstrapState,
@@ -52,6 +53,7 @@ import {
   type Participant,
   type VoiceSession,
   type CommunityExport,
+  type StageParticipants,
 } from '@cove/contracts';
 import type { ObjectStorage } from './object-storage.js';
 import { createMemoryObjectStorage } from './object-storage.js';
@@ -300,6 +302,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
   const demoCommunityIds = new Set(demoBootstrap.communities.map((community) => community.id));
   const demoChannelIds = new Set(demoBootstrap.channels.map((channel) => channel.id));
   const hub = new GatewayHub(demoCommunityIds, coordinator, repo);
+  const screenShareSessions = new Map<string, { participantId: string; trackId: string }[]>();
 
   // Seed demo messages into repository
   for (const msg of structuredClone(demoBootstrap.messages)) {
@@ -2177,7 +2180,39 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
         );
       }
 
-      const { name, kind, category, topic, privacy } = parsed.data;
+      const { name, kind, category, topic, privacy, parentChannelId, stageConfig } = parsed.data;
+
+      if (parentChannelId !== undefined) {
+        const parent = await repo.findChannelById(parentChannelId);
+        if (!parent || parent.communityId !== community.id) {
+          return problem(
+            reply,
+            404,
+            'Parent channel not found',
+            'The specified parent channel does not exist in this community.',
+            request.url,
+          );
+        }
+        if (parent.kind !== 'stage') {
+          return problem(
+            reply,
+            422,
+            'Invalid parent',
+            'Only stage channels may have subchannels.',
+            request.url,
+          );
+        }
+        if (parent.parentChannelId !== undefined) {
+          return problem(
+            reply,
+            422,
+            'Nesting not allowed',
+            'Subchannels cannot themselves have subchannels.',
+            request.url,
+          );
+        }
+      }
+
       const channelId = `channel-${crypto.randomUUID()}`;
       const channel: Channel = {
         id: channelId,
@@ -2193,6 +2228,8 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
           deletedContentRecoveryDays: 7,
           evidenceRetentionDays: 90,
         },
+        ...(parentChannelId !== undefined ? { parentChannelId } : {}),
+        ...(stageConfig !== undefined ? { stageConfig } : {}),
         participants: [],
       };
       await repo.addChannel(channel);
@@ -2227,6 +2264,188 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
 
       const list = await repo.getChannelsByCommunity(community.id);
       return reply.code(200).send({ channels: list });
+    },
+  );
+
+  // Stage subchannels
+  app.get<{ Params: { channelId: string } }>(
+    '/v1/channels/:channelId/subchannels',
+    async (request, reply) => {
+      const ok = await requireAuth(request, reply);
+      if (!ok) return;
+
+      const { account } = (request as any).user;
+      const channel = await findDynamicChannel(request.params.channelId);
+      if (!channel || channel.kind !== 'stage') {
+        return problem(
+          reply,
+          404,
+          'Stage channel not found',
+          'The requested stage channel does not exist.',
+          request.url,
+        );
+      }
+      const membership = await requireMembership(
+        reply,
+        channel.communityId,
+        account.id,
+        request.url,
+      );
+      if (!membership) return;
+
+      const communityChannels = await repo.getChannelsByCommunity(channel.communityId);
+      const subchannels = communityChannels.filter((c) => c.parentChannelId === channel.id);
+      return reply.code(200).send({ subchannels });
+    },
+  );
+
+  // Stage hover-to-eavesdrop peek — returns speakers and listeners without joining
+  app.get<{ Params: { channelId: string } }>(
+    '/v1/channels/:channelId/stage/peek',
+    async (request, reply) => {
+      const ok = await requireAuth(request, reply);
+      if (!ok) return;
+
+      const { account } = (request as any).user;
+      const channel = await findDynamicChannel(request.params.channelId);
+      if (!channel || channel.kind !== 'stage') {
+        return problem(
+          reply,
+          404,
+          'Stage channel not found',
+          'The requested stage channel does not exist.',
+          request.url,
+        );
+      }
+      const membership = await requireMembership(
+        reply,
+        channel.communityId,
+        account.id,
+        request.url,
+      );
+      if (!membership) return;
+
+      const communityChannels = await repo.getChannelsByCommunity(channel.communityId);
+      const subchannels = communityChannels.filter((c) => c.parentChannelId === channel.id);
+      const listeners: Participant[] = subchannels.flatMap((c) => c.participants);
+
+      const result: StageParticipants = stageParticipantsSchema.parse({
+        channelId: channel.id,
+        speakers: channel.participants,
+        listeners,
+        screenShares: screenShareSessions.get(channel.id) ?? [],
+      });
+      return reply.code(200).send(result);
+    },
+  );
+
+  // Screen share start/stop
+  app.post<{ Params: { channelId: string } }>(
+    '/v1/channels/:channelId/screen/start',
+    async (request, reply) => {
+      const ok = await requireAuth(request, reply);
+      if (!ok) return;
+
+      const { account: actor } = (request as any).user;
+      const channel = await findDynamicChannel(request.params.channelId);
+      if (!channel || (channel.kind !== 'voice' && channel.kind !== 'stage')) {
+        return problem(
+          reply,
+          404,
+          'Channel not found',
+          'The requested voice or stage channel does not exist.',
+          request.url,
+        );
+      }
+      const membership = await requireMembership(reply, channel.communityId, actor.id, request.url);
+      if (!membership) return;
+
+      const decision = await requirePermission(
+        reply,
+        channel.communityId,
+        membership,
+        actor.id,
+        'voice.join',
+        request.url,
+      );
+      if (!decision) return;
+
+      const inChannel = channel.participants.some((p) => p.id === actor.id);
+      if (!inChannel) {
+        return problem(
+          reply,
+          409,
+          'Not in channel',
+          'You must join the voice or stage channel before sharing your screen.',
+          request.url,
+        );
+      }
+
+      const existing = (screenShareSessions.get(channel.id) ?? []).find(
+        (s) => s.participantId === actor.id,
+      );
+      if (existing) {
+        return problem(
+          reply,
+          409,
+          'Already sharing',
+          'You are already sharing your screen in this channel.',
+          request.url,
+        );
+      }
+
+      const trackId = `track-${crypto.randomUUID()}`;
+      const sessions = screenShareSessions.get(channel.id) ?? [];
+      sessions.push({ participantId: actor.id, trackId });
+      screenShareSessions.set(channel.id, sessions);
+
+      hub.publish(
+        'screen.share.started',
+        { channelId: channel.id, participantId: actor.id, trackId },
+        channel.communityId,
+        actor.id,
+      );
+
+      return reply
+        .code(200)
+        .send({ channelId: channel.id, participantId: actor.id, trackId, active: true });
+    },
+  );
+
+  app.post<{ Params: { channelId: string } }>(
+    '/v1/channels/:channelId/screen/stop',
+    async (request, reply) => {
+      const ok = await requireAuth(request, reply);
+      if (!ok) return;
+
+      const { account: actor } = (request as any).user;
+      const channel = await findDynamicChannel(request.params.channelId);
+      if (!channel || (channel.kind !== 'voice' && channel.kind !== 'stage')) {
+        return problem(
+          reply,
+          404,
+          'Channel not found',
+          'The requested voice or stage channel does not exist.',
+          request.url,
+        );
+      }
+      const membership = await requireMembership(reply, channel.communityId, actor.id, request.url);
+      if (!membership) return;
+
+      const sessions = screenShareSessions.get(channel.id) ?? [];
+      const idx = sessions.findIndex((s) => s.participantId === actor.id);
+      if (idx !== -1) {
+        sessions.splice(idx, 1);
+        screenShareSessions.set(channel.id, sessions);
+        hub.publish(
+          'screen.share.ended',
+          { channelId: channel.id, participantId: actor.id },
+          channel.communityId,
+          actor.id,
+        );
+      }
+
+      return reply.code(200).send({ success: true });
     },
   );
 
@@ -2280,12 +2499,17 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
         }
       }
 
+      // Determine participant role: listener when joining any subchannel, speaker otherwise
+      const participantRole: 'speaker' | 'listener' =
+        channel.parentChannelId !== undefined ? 'listener' : 'speaker';
+
       // Add user to the target voice/stage channel participants
       const participant: Participant = {
         id: actor.id,
         displayName: actor.displayName,
         initials: actor.initials,
         status: actor.status,
+        participantRole,
       };
 
       const alreadyIn = channel.participants.some((p) => p.id === actor.id);
@@ -2307,7 +2531,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
         actor.displayName,
       );
 
-      return reply.code(200).send(mediaSession);
+      return reply.code(200).send({ ...mediaSession, participantRole });
     },
   );
 

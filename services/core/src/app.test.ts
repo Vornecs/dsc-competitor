@@ -2576,3 +2576,291 @@ describe('community data export', () => {
     expect(exportRes.statusCode).toBe(401);
   });
 });
+
+describe('stage broadcast subchannels and screen share', () => {
+  async function getAuth(app: Awaited<ReturnType<typeof buildApp>>) {
+    const email = `user-${crypto.randomUUID()}@test.cove.chat`;
+    const sendRes = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/email/send-code',
+      payload: { email },
+    });
+    const { challengeId } = sendRes.json();
+    const verifyRes = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/email/verify',
+      payload: { email, code: '123456', challengeId },
+    });
+    const data = verifyRes.json();
+    return { token: data.sessionToken as string, account: data.account as { id: string } };
+  }
+
+  async function setup(app: Awaited<ReturnType<typeof buildApp>>) {
+    const { token } = await getAuth(app);
+    const communityRes = await app.inject({
+      method: 'POST',
+      url: '/v1/communities',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 'Stage Guild' },
+    });
+    const communityId = communityRes.json().id as string;
+    const stageRes = await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/channels`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: {
+        name: 'Main Stage',
+        kind: 'stage',
+        category: 'Voice',
+        stageConfig: { broadcastKeybind: 'Ctrl+Shift+V' },
+      },
+    });
+    const stageChannelId = stageRes.json().id as string;
+    return { token, communityId, stageChannelId };
+  }
+
+  it('creates a subchannel under a stage channel', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const { token, communityId, stageChannelId } = await setup(app);
+
+    const subRes = await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/channels`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: {
+        name: 'Squad Alpha',
+        kind: 'voice',
+        category: 'Voice',
+        parentChannelId: stageChannelId,
+      },
+    });
+    expect(subRes.statusCode).toBe(201);
+    const sub = subRes.json();
+    expect(sub.parentChannelId).toBe(stageChannelId);
+    expect(sub.kind).toBe('voice');
+  });
+
+  it('rejects subchannel creation under a non-stage channel', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const { token, communityId } = await setup(app);
+
+    const textRes = await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/channels`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 'general', kind: 'text', category: 'Text' },
+    });
+    const textChannelId = textRes.json().id as string;
+
+    const badRes = await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/channels`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: {
+        name: 'Bad Sub',
+        kind: 'voice',
+        category: 'Voice',
+        parentChannelId: textChannelId,
+      },
+    });
+    expect(badRes.statusCode).toBe(422);
+  });
+
+  it('rejects nested subchannels (subchannel of a subchannel)', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const { token, communityId, stageChannelId } = await setup(app);
+
+    const subRes = await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/channels`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 'Sub 1', kind: 'voice', category: 'Voice', parentChannelId: stageChannelId },
+    });
+    const subId = subRes.json().id as string;
+
+    const nestedRes = await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/channels`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 'Nested', kind: 'voice', category: 'Voice', parentChannelId: subId },
+    });
+    expect(nestedRes.statusCode).toBe(422);
+  });
+
+  it('lists subchannels of a stage channel', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const { token, communityId, stageChannelId } = await setup(app);
+
+    await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/channels`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 'Sub A', kind: 'voice', category: 'Voice', parentChannelId: stageChannelId },
+    });
+    await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/channels`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 'Sub B', kind: 'voice', category: 'Voice', parentChannelId: stageChannelId },
+    });
+
+    const listRes = await app.inject({
+      method: 'GET',
+      url: `/v1/channels/${stageChannelId}/subchannels`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(listRes.statusCode).toBe(200);
+    const { subchannels } = listRes.json();
+    expect(subchannels).toHaveLength(2);
+    expect(subchannels.every((c: any) => c.parentChannelId === stageChannelId)).toBe(true);
+  });
+
+  it('returns stage peek with speakers and listeners', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const { token, communityId, stageChannelId } = await setup(app);
+
+    // Join the stage channel as a speaker
+    await app.inject({
+      method: 'POST',
+      url: `/v1/channels/${stageChannelId}/voice/join`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+
+    // Create and join a subchannel as a listener
+    const subRes = await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/channels`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 'Sub A', kind: 'voice', category: 'Voice', parentChannelId: stageChannelId },
+    });
+    const subId = subRes.json().id as string;
+    const { token: memberToken } = await getAuth(app);
+    await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/join`,
+      headers: { authorization: `Bearer ${memberToken}` },
+    });
+    await app.inject({
+      method: 'POST',
+      url: `/v1/channels/${subId}/voice/join`,
+      headers: { authorization: `Bearer ${memberToken}` },
+    });
+
+    const peekRes = await app.inject({
+      method: 'GET',
+      url: `/v1/channels/${stageChannelId}/stage/peek`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(peekRes.statusCode).toBe(200);
+    const peek = peekRes.json();
+    expect(peek.channelId).toBe(stageChannelId);
+    expect(peek.speakers.length).toBeGreaterThan(0);
+    expect(peek.listeners.length).toBeGreaterThan(0);
+    expect(Array.isArray(peek.screenShares)).toBe(true);
+  });
+
+  it('returns participantRole=speaker when joining a stage channel', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const { token, stageChannelId } = await setup(app);
+
+    const joinRes = await app.inject({
+      method: 'POST',
+      url: `/v1/channels/${stageChannelId}/voice/join`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(joinRes.statusCode).toBe(200);
+    expect(joinRes.json().participantRole).toBe('speaker');
+  });
+
+  it('returns participantRole=listener when joining a stage subchannel', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const { token, communityId, stageChannelId } = await setup(app);
+
+    const subRes = await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/channels`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 'Sub A', kind: 'voice', category: 'Voice', parentChannelId: stageChannelId },
+    });
+    const subId = subRes.json().id as string;
+
+    const joinRes = await app.inject({
+      method: 'POST',
+      url: `/v1/channels/${subId}/voice/join`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(joinRes.statusCode).toBe(200);
+    expect(joinRes.json().participantRole).toBe('listener');
+  });
+
+  it('starts and stops a screen share in a voice channel', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const { token, communityId } = await setup(app);
+
+    // Create a regular voice channel
+    const voiceRes = await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/channels`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 'Gaming', kind: 'voice', category: 'Voice' },
+    });
+    const voiceChannelId = voiceRes.json().id as string;
+
+    // Must join before screen sharing
+    const notInRes = await app.inject({
+      method: 'POST',
+      url: `/v1/channels/${voiceChannelId}/screen/start`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(notInRes.statusCode).toBe(409);
+
+    // Join the channel, then start screen share
+    await app.inject({
+      method: 'POST',
+      url: `/v1/channels/${voiceChannelId}/voice/join`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    const startRes = await app.inject({
+      method: 'POST',
+      url: `/v1/channels/${voiceChannelId}/screen/start`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(startRes.statusCode).toBe(200);
+    const share = startRes.json();
+    expect(share.channelId).toBe(voiceChannelId);
+    expect(typeof share.trackId).toBe('string');
+    expect(share.active).toBe(true);
+
+    // Duplicate start is rejected
+    const dupRes = await app.inject({
+      method: 'POST',
+      url: `/v1/channels/${voiceChannelId}/screen/start`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(dupRes.statusCode).toBe(409);
+
+    // Stop screen share
+    const stopRes = await app.inject({
+      method: 'POST',
+      url: `/v1/channels/${voiceChannelId}/screen/stop`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(stopRes.statusCode).toBe(200);
+
+    // Can start again after stopping
+    const restart = await app.inject({
+      method: 'POST',
+      url: `/v1/channels/${voiceChannelId}/screen/start`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(restart.statusCode).toBe(200);
+  });
+});
