@@ -1,4 +1,5 @@
 import type { VoiceSession } from '@cove/contracts';
+import { AccessToken, RoomServiceClient } from 'livekit-server-sdk';
 
 export interface MediaProvider {
   createJoinToken(
@@ -42,23 +43,26 @@ export class FakeMediaProvider implements MediaProvider {
 }
 
 export class LiveKitMediaProvider implements MediaProvider {
-  private apiKey: string;
-  private apiSecret: string;
-  private hostUrl: string;
+  private readonly apiKey: string;
+  private readonly apiSecret: string;
+  private readonly hostUrl: string;
+  private readonly roomService: Pick<RoomServiceClient, 'updateParticipant'>;
 
-  constructor() {
-    const key = process.env.LIVEKIT_API_KEY;
-    const secret = process.env.LIVEKIT_API_SECRET;
-    const url = process.env.LIVEKIT_URL || process.env.LIVEKIT_HOST_URL;
-
-    if (!key || !secret || !url) {
-      throw new Error(
-        'LiveKit media provider is blocked: missing LIVEKIT_API_KEY, LIVEKIT_API_SECRET, or LIVEKIT_URL.',
-      );
+  constructor(
+    config: { apiKey: string; apiSecret: string; url: string },
+    roomService?: Pick<RoomServiceClient, 'updateParticipant'>,
+  ) {
+    const url = new URL(config.url);
+    if (url.protocol !== 'ws:' && url.protocol !== 'wss:') {
+      throw new Error('LIVEKIT_URL must use ws:// or wss://.');
     }
-    this.apiKey = key;
-    this.apiSecret = secret;
-    this.hostUrl = url;
+    this.apiKey = config.apiKey;
+    this.apiSecret = config.apiSecret;
+    this.hostUrl = url.toString().replace(/\/$/, '');
+    const serviceUrl = new URL(this.hostUrl);
+    serviceUrl.protocol = serviceUrl.protocol === 'wss:' ? 'https:' : 'http:';
+    this.roomService =
+      roomService ?? new RoomServiceClient(serviceUrl.toString(), config.apiKey, config.apiSecret);
   }
 
   async createJoinToken(
@@ -67,10 +71,27 @@ export class LiveKitMediaProvider implements MediaProvider {
     displayName: string,
     options: { canPublish?: boolean } = {},
   ): Promise<VoiceSession> {
-    // In a future cycle when credentials are unblocked, we would use the livekit-server-sdk
-    // to sign a real token here. For now, since the constructor throws when credentials
-    // are missing, this path is blocked.
-    throw new Error('LiveKit media provider is blocked: credentials unavailable.');
+    const roomName = `room-${channelId}`;
+    const canPublish = options.canPublish ?? true;
+    const accessToken = new AccessToken(this.apiKey, this.apiSecret, {
+      identity: accountId,
+      name: displayName,
+      ttl: '10m',
+    });
+    accessToken.addGrant({
+      roomJoin: true,
+      room: roomName,
+      canSubscribe: true,
+      canPublish,
+      canPublishData: canPublish,
+    });
+    return {
+      token: await accessToken.toJwt(),
+      url: this.hostUrl,
+      roomName,
+      participantId: accountId,
+      canPublish,
+    };
   }
 
   async setPublishPermission(
@@ -79,6 +100,30 @@ export class LiveKitMediaProvider implements MediaProvider {
     displayName: string,
     canPublish: boolean,
   ): Promise<VoiceSession> {
-    throw new Error('LiveKit media provider is blocked: credentials unavailable.');
+    await this.roomService.updateParticipant(`room-${channelId}`, accountId, {
+      name: displayName,
+      permission: {
+        canSubscribe: true,
+        canPublish,
+        canPublishData: canPublish,
+      },
+    });
+    return this.createJoinToken(channelId, accountId, displayName, { canPublish });
   }
+}
+
+export function createMediaProviderFromEnv(
+  env: NodeJS.ProcessEnv = process.env,
+): MediaProvider {
+  const apiKey = env.LIVEKIT_API_KEY;
+  const apiSecret = env.LIVEKIT_API_SECRET;
+  const url = env.LIVEKIT_URL ?? env.LIVEKIT_HOST_URL;
+  const configured = [apiKey, apiSecret, url].filter(Boolean).length;
+  if (configured === 0) return new FakeMediaProvider();
+  if (!apiKey || !apiSecret || !url) {
+    throw new Error(
+      'LiveKit configuration is incomplete: LIVEKIT_API_KEY, LIVEKIT_API_SECRET, and LIVEKIT_URL are required together.',
+    );
+  }
+  return new LiveKitMediaProvider({ apiKey, apiSecret, url });
 }

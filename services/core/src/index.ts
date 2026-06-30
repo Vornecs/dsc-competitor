@@ -5,6 +5,7 @@ import type { GatewayCoordinator } from './gateway-coordinator.js';
 import { createMemoryGatewayCoordinator } from './memory-gateway-coordinator.js';
 import { createRedisGatewayCoordinator } from './redis-gateway-coordinator.js';
 import { parseCorsAllowedOrigins, registerWebClient } from './deployment.js';
+import { createMediaProviderFromEnv } from './media-provider.js';
 
 let repo: Repository;
 
@@ -37,6 +38,7 @@ try {
 const app = await buildApp({
   repo,
   coordinator,
+  mediaProvider: createMediaProviderFromEnv(),
   corsAllowedOrigins: parseCorsAllowedOrigins(process.env.CORS_ALLOWED_ORIGINS),
 });
 if (process.env.WEB_DIST_DIR) {
