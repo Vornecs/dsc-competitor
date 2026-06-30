@@ -1,0 +1,22 @@
+# Local development PostgreSQL — matches D-006 (no Kafka/ES/K8s)
+version: "3.9"
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: cove
+      POSTGRES_PASSWORD: cove-dev
+      POSTGRES_DB: cove
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./services/core/schema:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cove"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:

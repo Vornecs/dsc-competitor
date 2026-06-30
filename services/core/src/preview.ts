@@ -3,8 +3,19 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createMemoryRepository } from './memory-repository.js';
 import { buildApp } from './app.js';
+import type { Repository } from './repository.js';
 
-const repo = createMemoryRepository();
+let repo: Repository;
+
+if (process.env.DATABASE_URL) {
+  const { default: pg } = await import('pg');
+  const { createPostgresRepository } = await import('./postgres-repository.js');
+  const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL, max: 20 });
+  repo = createPostgresRepository(pool);
+} else {
+  repo = createMemoryRepository();
+}
+
 const app = await buildApp({ repo });
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
 const webRoot = path.resolve(currentDirectory, '../../../apps/web/dist');

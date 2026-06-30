@@ -17,10 +17,12 @@
     "@fastify/cors": "latest",
     "@fastify/helmet": "latest",
     "@fastify/websocket": "latest",
-    "fastify": "latest"
+    "fastify": "latest",
+    "pg": "latest"
   },
   "devDependencies": {
     "@types/node": "latest",
+    "@types/pg": "latest",
     "@types/ws": "latest",
     "tsx": "latest",
     "typescript": "latest",

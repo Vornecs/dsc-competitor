@@ -29,45 +29,45 @@ export function createMemoryRepository(): Repository {
 
   return {
     // -- Accounts -----------------------------------------------------------
-    getAccountByEmail(email) {
+    async getAccountByEmail(email) {
       return accountsByEmail.get(email);
     },
-    setAccount(email, account) {
+    async setAccount(email, account) {
       accountsByEmail.set(email, account);
     },
 
     // -- Email challenges ---------------------------------------------------
-    getEmailChallenge(key) {
+    async getEmailChallenge(key) {
       return emailChallenges.get(key);
     },
-    setEmailChallenge(key, challenge) {
+    async setEmailChallenge(key, challenge) {
       emailChallenges.set(key, challenge);
     },
-    deleteEmailChallenge(key) {
+    async deleteEmailChallenge(key) {
       emailChallenges.delete(key);
     },
 
     // -- Passkeys -----------------------------------------------------------
-    getPasskeys(email) {
+    async getPasskeys(email) {
       return passkeys.get(email) ?? [];
     },
-    addPasskey(email, credential) {
+    async addPasskey(email, credential) {
       const list = passkeys.get(email) ?? [];
       list.push(credential);
       passkeys.set(email, list);
     },
 
     // -- Sessions -----------------------------------------------------------
-    getSession(token) {
+    async getSession(token) {
       return sessions.get(token);
     },
-    setSession(token, session) {
+    async setSession(token, session) {
       sessions.set(token, session);
     },
-    deleteSession(token) {
+    async deleteSession(token) {
       sessions.delete(token);
     },
-    listSessionsByEmail(email) {
+    async listSessionsByEmail(email) {
       const result: Array<{ token: string; session: SessionRecord }> = [];
       for (const [token, session] of sessions.entries()) {
         if (session.email === email) result.push({ token, session });
@@ -76,16 +76,16 @@ export function createMemoryRepository(): Repository {
     },
 
     // -- Communities --------------------------------------------------------
-    getCommunity(id) {
+    async getCommunity(id) {
       return communities.get(id);
     },
-    setCommunity(community) {
+    async setCommunity(community) {
       communities.set(community.id, community);
     },
-    deleteCommunity(id) {
+    async deleteCommunity(id) {
       communities.delete(id);
     },
-    listCommunitiesForAccount(accountId) {
+    async listCommunitiesForAccount(accountId) {
       const result: Community[] = [];
       for (const [communityId, members] of memberships.entries()) {
         if (members.some((m) => m.accountId === accountId)) {
@@ -97,18 +97,18 @@ export function createMemoryRepository(): Repository {
     },
 
     // -- Memberships --------------------------------------------------------
-    getMemberships(communityId) {
+    async getMemberships(communityId) {
       return memberships.get(communityId) ?? [];
     },
-    getMembership(communityId, accountId) {
+    async getMembership(communityId, accountId) {
       return (memberships.get(communityId) ?? []).find((m) => m.accountId === accountId);
     },
-    addMembership(communityId, membership) {
+    async addMembership(communityId, membership) {
       const list = memberships.get(communityId) ?? [];
       list.push(membership);
       memberships.set(communityId, list);
     },
-    removeMembership(communityId, accountId) {
+    async removeMembership(communityId, accountId) {
       const list = memberships.get(communityId) ?? [];
       const index = list.findIndex((m) => m.accountId === accountId);
       if (index >= 0) list.splice(index, 1);
@@ -118,23 +118,23 @@ export function createMemoryRepository(): Repository {
         memberships.set(communityId, list);
       }
     },
-    clearMemberships(communityId) {
+    async clearMemberships(communityId) {
       memberships.delete(communityId);
     },
 
     // -- Channels -----------------------------------------------------------
-    getChannelsByCommunity(communityId) {
+    async getChannelsByCommunity(communityId) {
       return channelsByCommunity.get(communityId) ?? [];
     },
-    addChannel(channel) {
+    async addChannel(channel) {
       const list = channelsByCommunity.get(channel.communityId) ?? [];
       list.push(channel);
       channelsByCommunity.set(channel.communityId, list);
     },
-    clearChannels(communityId) {
+    async clearChannels(communityId) {
       channelsByCommunity.delete(communityId);
     },
-    findChannelById(channelId) {
+    async findChannelById(channelId) {
       for (const channels of channelsByCommunity.values()) {
         const channel = channels.find((c) => c.id === channelId);
         if (channel) return channel;
@@ -143,30 +143,30 @@ export function createMemoryRepository(): Repository {
     },
 
     // -- Roles --------------------------------------------------------------
-    getRolesByCommunity(communityId) {
+    async getRolesByCommunity(communityId) {
       return rolesByCommunity.get(communityId) ?? [];
     },
-    addRole(role) {
+    async addRole(role) {
       const list = rolesByCommunity.get(role.communityId) ?? [];
       list.push(role);
       rolesByCommunity.set(role.communityId, list);
     },
-    updateRole(communityId, roleId, updatedRole) {
+    async updateRole(communityId, roleId, updatedRole) {
       const list = rolesByCommunity.get(communityId) ?? [];
       const index = list.findIndex((r) => r.id === roleId);
       if (index >= 0) list[index] = updatedRole;
     },
-    deleteRole(communityId, roleId) {
+    async deleteRole(communityId, roleId) {
       const list = rolesByCommunity.get(communityId) ?? [];
       const index = list.findIndex((r) => r.id === roleId);
       if (index >= 0) list.splice(index, 1);
     },
-    clearRoles(communityId) {
+    async clearRoles(communityId) {
       rolesByCommunity.delete(communityId);
     },
 
     // -- Role assignments ---------------------------------------------------
-    assignRoleToMember(communityId, memberId, roleId) {
+    async assignRoleToMember(communityId, memberId, roleId) {
       const membership = (memberships.get(communityId) ?? []).find((m) => m.accountId === memberId);
       if (!membership) return false;
       if (!membership.roleIds.includes(roleId)) {
@@ -175,35 +175,35 @@ export function createMemoryRepository(): Repository {
       }
       return false;
     },
-    removeRoleFromMember(communityId, memberId, roleId) {
+    async removeRoleFromMember(communityId, memberId, roleId) {
       const membership = (memberships.get(communityId) ?? []).find((m) => m.accountId === memberId);
       if (membership) {
         membership.roleIds = membership.roleIds.filter((id) => id !== roleId);
       }
     },
-    removeRoleFromAllMembers(communityId, roleId) {
+    async removeRoleFromAllMembers(communityId, roleId) {
       for (const member of memberships.get(communityId) ?? []) {
         member.roleIds = member.roleIds.filter((id) => id !== roleId);
       }
     },
 
     // -- Invites ------------------------------------------------------------
-    getInvitesByCommunity(communityId) {
+    async getInvitesByCommunity(communityId) {
       return invitesByCommunity.get(communityId) ?? [];
     },
-    getInviteByCode(code) {
+    async getInviteByCode(code) {
       return invitesByCode.get(code);
     },
-    addInvite(invite) {
+    async addInvite(invite) {
       const list = invitesByCommunity.get(invite.communityId) ?? [];
       list.push(invite);
       invitesByCommunity.set(invite.communityId, list);
       invitesByCode.set(invite.code, invite);
     },
-    updateInvite(invite) {
+    async updateInvite(invite) {
       invitesByCode.set(invite.code, invite);
     },
-    deleteInvite(communityId, inviteId) {
+    async deleteInvite(communityId, inviteId) {
       const list = invitesByCommunity.get(communityId) ?? [];
       const index = list.findIndex((i) => i.id === inviteId);
       if (index >= 0) {
@@ -211,10 +211,10 @@ export function createMemoryRepository(): Repository {
         if (removed) invitesByCode.delete(removed.code);
       }
     },
-    deleteInviteByCode(code) {
+    async deleteInviteByCode(code) {
       invitesByCode.delete(code);
     },
-    clearInvites(communityId) {
+    async clearInvites(communityId) {
       for (const invite of invitesByCommunity.get(communityId) ?? []) {
         invitesByCode.delete(invite.code);
       }
@@ -222,16 +222,16 @@ export function createMemoryRepository(): Repository {
     },
 
     // -- Messages -----------------------------------------------------------
-    getMessagesByChannel(channelId) {
+    async getMessagesByChannel(channelId) {
       return messages.filter((m) => m.channelId === channelId);
     },
-    addMessage(message) {
+    async addMessage(message) {
       messages.push(message);
     },
-    getIdempotentMessage(key) {
+    async getIdempotentMessage(key) {
       return idempotency.get(key);
     },
-    setIdempotentMessage(key, message) {
+    async setIdempotentMessage(key, message) {
       idempotency.set(key, message);
     },
   };

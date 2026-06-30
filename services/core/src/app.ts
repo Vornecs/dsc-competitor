@@ -164,23 +164,23 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
 
   // Seed demo messages into repository
   for (const msg of structuredClone(demoBootstrap.messages)) {
-    repo.addMessage(msg);
+    await repo.addMessage(msg);
   }
 
   // Pre-populate with our demo account
-  repo.setAccount('nightshift@cove.chat', demoBootstrap.account);
+  await repo.setAccount('nightshift@cove.chat', demoBootstrap.account);
 
-  function findDynamicChannel(channelId: string): Channel | undefined {
+  async function findDynamicChannel(channelId: string): Promise<Channel | undefined> {
     return repo.findChannelById(channelId);
   }
 
-  function resolveMemberPermission(
+  async function resolveMemberPermission(
     communityId: string,
     membership: Membership,
     memberId: string,
     permission: string,
-  ): PermissionDecision {
-    const roles = repo.getRolesByCommunity(communityId);
+  ): Promise<PermissionDecision> {
+    const roles = await repo.getRolesByCommunity(communityId);
     const everyoneRole = roles.find((role) => role.managed && role.name === '@everyone');
     const assignedRoles = roles.filter((role) => membership.roleIds.includes(role.id));
     const rules = [
@@ -209,15 +209,15 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
     });
   }
 
-  function requirePermission(
+  async function requirePermission(
     reply: FastifyReply,
     communityId: string,
     membership: Membership,
     memberId: string,
     permission: string,
     requestUrl: string,
-  ): PermissionDecision | false {
-    const decision = resolveMemberPermission(communityId, membership, memberId, permission);
+  ): Promise<PermissionDecision | false> {
+    const decision = await resolveMemberPermission(communityId, membership, memberId, permission);
     if (!decision.allowed) {
       problem(reply, 403, 'Permission denied', decision.explanation, requestUrl);
       return false;
@@ -225,11 +225,15 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
     return decision;
   }
 
-  function messageAudience(communityId: string, permission: string): ReadonlySet<string> {
+  async function messageAudience(
+    communityId: string,
+    permission: string,
+  ): Promise<ReadonlySet<string>> {
     const audience = new Set<string>();
-    for (const membership of repo.getMemberships(communityId)) {
+    for (const membership of await repo.getMemberships(communityId)) {
       if (
-        resolveMemberPermission(communityId, membership, membership.accountId, permission).allowed
+        (await resolveMemberPermission(communityId, membership, membership.accountId, permission))
+          .allowed
       ) {
         audience.add(membership.accountId);
       }
@@ -237,17 +241,20 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
     return audience;
   }
 
-  function getMembership(communityId: string, accountId: string): Membership | undefined {
+  async function getMembership(
+    communityId: string,
+    accountId: string,
+  ): Promise<Membership | undefined> {
     return repo.getMembership(communityId, accountId);
   }
 
-  function requireMembership(
+  async function requireMembership(
     reply: FastifyReply,
     communityId: string,
     accountId: string,
     requestUrl: string,
-  ): Membership | false {
-    const membership = getMembership(communityId, accountId);
+  ): Promise<Membership | false> {
+    const membership = await getMembership(communityId, accountId);
     if (!membership) {
       problem(reply, 403, 'Not a member', 'You are not a member of this community.', requestUrl);
       return false;
@@ -268,7 +275,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
       return false;
     }
     const token = authHeader.substring(7);
-    const session = repo.getSession(token);
+    const session = await repo.getSession(token);
     if (!session) {
       problem(reply, 401, 'Unauthorized', 'Session is invalid or has expired.', request.url);
       return false;
@@ -278,7 +285,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
     session.lastActiveAt = new Date().toISOString();
 
     // Resolve user account
-    const account = repo.getAccountByEmail(session.email);
+    const account = await repo.getAccountByEmail(session.email);
     if (!account) {
       problem(reply, 401, 'Unauthorized', 'User account not found.', request.url);
       return false;
@@ -292,10 +299,10 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
   await app.register(helmet, { contentSecurityPolicy: false });
   await app.register(websocket);
 
-  const currentBootstrap = (): BootstrapState => {
+  const currentBootstrap = async (): Promise<BootstrapState> => {
     const bootstrapMessages: Message[] = [];
     for (const channelId of demoChannelIds) {
-      bootstrapMessages.push(...repo.getMessagesByChannel(channelId));
+      bootstrapMessages.push(...(await repo.getMessagesByChannel(channelId)));
     }
     return bootstrapStateSchema.parse({
       ...demoBootstrap,
@@ -331,7 +338,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
     const challengeId = crypto.randomUUID();
     const expiresAt = Date.now() + 10 * 60 * 1000;
 
-    repo.setEmailChallenge(email, { code, challengeId, expiresAt });
+    await repo.setEmailChallenge(email, { code, challengeId, expiresAt });
     app.log.info(`[AUTH] Sent code ${code} to ${email} (challenge: ${challengeId})`);
 
     return reply.code(200).send({ success: true, challengeId });
@@ -350,7 +357,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
     }
 
     const { email, code, challengeId } = parsed.data;
-    const challenge = repo.getEmailChallenge(email);
+    const challenge = await repo.getEmailChallenge(email);
     if (!challenge || challenge.challengeId !== challengeId || challenge.expiresAt < Date.now()) {
       return problem(
         reply,
@@ -365,9 +372,9 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
       return problem(reply, 400, 'Invalid code', 'The code provided is incorrect.', request.url);
     }
 
-    repo.deleteEmailChallenge(email);
+    await repo.deleteEmailChallenge(email);
 
-    let account = repo.getAccountByEmail(email);
+    let account = await repo.getAccountByEmail(email);
     let isNewUser = false;
     if (!account) {
       isNewUser = true;
@@ -381,7 +388,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
         initials: (displayName || 'US').substring(0, 2).toUpperCase(),
         status: 'online',
       };
-      repo.setAccount(email, account);
+      await repo.setAccount(email, account);
     }
 
     const sessionToken = `sess-${crypto.randomUUID()}`;
@@ -389,7 +396,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
     const deviceName = request.headers['user-agent'] || 'Unknown Device';
     const ipAddress = request.ip || '127.0.0.1';
 
-    repo.setSession(sessionToken, {
+    await repo.setSession(sessionToken, {
       sessionId,
       email,
       deviceName,
@@ -463,7 +470,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
     delete userSession.registrationChallenge;
 
     const email = userSession.email;
-    repo.addPasskey(email, { credentialId, rawId, attestationObject, clientDataJSON });
+    await repo.addPasskey(email, { credentialId, rawId, attestationObject, clientDataJSON });
 
     return reply.code(200).send({ success: true });
   });
@@ -481,10 +488,10 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
     }
 
     const { email } = parsed.data;
-    const credentials = repo.getPasskeys(email);
+    const credentials = await repo.getPasskeys(email);
 
     const challenge = crypto.randomBytes(32).toString('base64url');
-    repo.setEmailChallenge(`passkey-login-${email}`, {
+    await repo.setEmailChallenge(`passkey-login-${email}`, {
       code: challenge,
       challengeId: challenge,
       expiresAt: Date.now() + 10 * 60 * 1000,
@@ -514,7 +521,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
 
     const { email, challenge, credentialId, authenticatorData, clientDataJSON, signature } =
       parsed.data;
-    const stored = repo.getEmailChallenge(`passkey-login-${email}`);
+    const stored = await repo.getEmailChallenge(`passkey-login-${email}`);
     if (!stored || stored.challengeId !== challenge || stored.expiresAt < Date.now()) {
       return problem(
         reply,
@@ -525,9 +532,9 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
       );
     }
 
-    repo.deleteEmailChallenge(`passkey-login-${email}`);
+    await repo.deleteEmailChallenge(`passkey-login-${email}`);
 
-    const credentials = repo.getPasskeys(email);
+    const credentials = await repo.getPasskeys(email);
     const cred = credentials.find((c) => c.credentialId === credentialId);
     if (!cred) {
       return problem(
@@ -549,7 +556,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
       );
     }
 
-    const account = repo.getAccountByEmail(email);
+    const account = await repo.getAccountByEmail(email);
     if (!account) {
       return problem(reply, 404, 'Account not found', 'Account not found.', request.url);
     }
@@ -559,7 +566,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
     const deviceName = request.headers['user-agent'] || 'Unknown Device';
     const ipAddress = request.ip || '127.0.0.1';
 
-    repo.setSession(sessionToken, {
+    await repo.setSession(sessionToken, {
       sessionId,
       email,
       deviceName,
@@ -582,7 +589,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
     const email = currentSession.email;
 
     const userSessions: DeviceSession[] = [];
-    for (const { token, session: sess } of repo.listSessionsByEmail(email)) {
+    for (const { token, session: sess } of await repo.listSessionsByEmail(email)) {
       userSessions.push({
         id: sess.sessionId,
         deviceName: sess.deviceName,
@@ -605,9 +612,9 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
       const { sessionId } = request.params;
 
       let found = false;
-      for (const { token, session: sess } of repo.listSessionsByEmail(currentSession.email)) {
+      for (const { token, session: sess } of await repo.listSessionsByEmail(currentSession.email)) {
         if (sess.sessionId === sessionId) {
-          repo.deleteSession(token);
+          await repo.deleteSession(token);
           found = true;
         }
       }
@@ -632,7 +639,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
       const demoChannel = demoBootstrap.channels.find(
         (candidate) => candidate.id === request.params.channelId,
       );
-      const dynamicChannel = findDynamicChannel(request.params.channelId);
+      const dynamicChannel = await findDynamicChannel(request.params.channelId);
       const channel = demoChannel ?? dynamicChannel;
       if (!channel || channel.kind !== 'text') {
         return problem(
@@ -648,14 +655,14 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
         const ok = await requireAuth(request, reply);
         if (!ok) return;
         const { account: authenticatedAccount } = (request as any).user;
-        const membership = requireMembership(
+        const membership = await requireMembership(
           reply,
           dynamicChannel.communityId,
           authenticatedAccount.id,
           request.url,
         );
         if (!membership) return;
-        const permission = requirePermission(
+        const permission = await requirePermission(
           reply,
           dynamicChannel.communityId,
           membership,
@@ -667,7 +674,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
       }
 
       return reply.code(200).send({
-        items: repo.getMessagesByChannel(channel.id),
+        items: await repo.getMessagesByChannel(channel.id),
         nextCursor: null,
       });
     },
@@ -701,7 +708,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
       const demoChannel = demoBootstrap.channels.find(
         (candidate) => candidate.id === request.params.channelId,
       );
-      const dynamicChannel = findDynamicChannel(request.params.channelId);
+      const dynamicChannel = await findDynamicChannel(request.params.channelId);
       const channel = demoChannel ?? dynamicChannel;
       if (!channel || channel.kind !== 'text') {
         return problem(
@@ -717,14 +724,14 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
         const ok = await requireAuth(request, reply);
         if (!ok) return;
         const { account: authenticatedAccount } = (request as any).user;
-        const membership = requireMembership(
+        const membership = await requireMembership(
           reply,
           dynamicChannel.communityId,
           authenticatedAccount.id,
           request.url,
         );
         if (!membership) return;
-        const permission = requirePermission(
+        const permission = await requirePermission(
           reply,
           dynamicChannel.communityId,
           membership,
@@ -747,7 +754,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
       }
 
       const scopedIdempotencyKey = `${messageAuthor.id}:${channel.id}:${idempotencyKey}`;
-      const existing = repo.getIdempotentMessage(scopedIdempotencyKey);
+      const existing = await repo.getIdempotentMessage(scopedIdempotencyKey);
       if (existing) return reply.code(200).send(existing);
 
       const message = messageSchema.parse({
@@ -760,14 +767,14 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
         editedAt: null,
         reactions: [],
       });
-      repo.addMessage(message);
-      repo.setIdempotentMessage(scopedIdempotencyKey, message);
+      await repo.addMessage(message);
+      await repo.setIdempotentMessage(scopedIdempotencyKey, message);
       hub.publish(
         'message.created',
         message,
         channel.communityId,
         messageAuthor.id,
-        dynamicChannel ? messageAudience(channel.communityId, 'message.read') : undefined,
+        dynamicChannel ? await messageAudience(channel.communityId, 'message.read') : undefined,
       );
       return reply.code(201).send(message);
     },
@@ -799,8 +806,8 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
       accent: accent ?? '#6f8cff',
       memberCount: 1,
     };
-    repo.setCommunity(community);
-    repo.addMembership(communityId, { accountId: account.id, role: 'owner', roleIds: [] });
+    await repo.setCommunity(community);
+    await repo.addMembership(communityId, { accountId: account.id, role: 'owner', roleIds: [] });
 
     // Create default @everyone role
     const everyoneRole: Role = {
@@ -819,7 +826,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
       ],
       createdAt: new Date().toISOString(),
     };
-    repo.addRole(everyoneRole);
+    await repo.addRole(everyoneRole);
     hub.grantCommunityAccess(account.id, communityId);
 
     app.log.info(`[COMMUNITY] Created ${communityId} by ${account.id}`);
@@ -831,7 +838,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
     if (!ok) return;
 
     const { account } = (request as any).user;
-    const userCommunities = repo.listCommunitiesForAccount(account.id);
+    const userCommunities = await repo.listCommunitiesForAccount(account.id);
     return reply.code(200).send({ communities: userCommunities });
   });
 
@@ -842,7 +849,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
       if (!ok) return;
 
       const { account } = (request as any).user;
-      const community = repo.getCommunity(request.params.communityId);
+      const community = await repo.getCommunity(request.params.communityId);
       if (!community) {
         return problem(
           reply,
@@ -852,7 +859,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
           request.url,
         );
       }
-      const membership = requireMembership(reply, community.id, account.id, request.url);
+      const membership = await requireMembership(reply, community.id, account.id, request.url);
       if (!membership) return;
       return reply.code(200).send(community);
     },
@@ -865,7 +872,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
       if (!ok) return;
 
       const { account } = (request as any).user;
-      const community = repo.getCommunity(request.params.communityId);
+      const community = await repo.getCommunity(request.params.communityId);
       if (!community) {
         return problem(
           reply,
@@ -876,7 +883,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
         );
       }
 
-      const existingMembership = repo.getMembership(community.id, account.id);
+      const existingMembership = await repo.getMembership(community.id, account.id);
       if (existingMembership) {
         return problem(
           reply,
@@ -887,8 +894,12 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
         );
       }
 
-      repo.addMembership(community.id, { accountId: account.id, role: 'member', roleIds: [] });
-      community.memberCount = repo.getMemberships(community.id).length;
+      await repo.addMembership(community.id, {
+        accountId: account.id,
+        role: 'member',
+        roleIds: [],
+      });
+      community.memberCount = (await repo.getMemberships(community.id)).length;
       hub.grantCommunityAccess(account.id, community.id);
       return reply.code(204).send();
     },
@@ -901,7 +912,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
       if (!ok) return;
 
       const { account } = (request as any).user;
-      const community = repo.getCommunity(request.params.communityId);
+      const community = await repo.getCommunity(request.params.communityId);
       if (!community) {
         return problem(
           reply,
@@ -914,7 +925,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
 
       const targetMemberId =
         request.params.memberId === 'me' ? account.id : request.params.memberId;
-      const members = repo.getMemberships(community.id);
+      const members = await repo.getMemberships(community.id);
       const target = members.find((m) => m.accountId === targetMemberId);
       if (!target) {
         return problem(
@@ -926,7 +937,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
         );
       }
 
-      const selfMembership = repo.getMembership(community.id, account.id);
+      const selfMembership = await repo.getMembership(community.id, account.id);
       const selfRole = selfMembership?.role ?? null;
       const isSelf = targetMemberId === account.id;
       const isOwner = selfRole === 'owner';
@@ -951,15 +962,15 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
         );
       }
 
-      repo.removeMembership(community.id, targetMemberId);
+      await repo.removeMembership(community.id, targetMemberId);
       hub.revokeCommunityAccess(targetMemberId, community.id);
-      const remaining = repo.getMemberships(community.id);
+      const remaining = await repo.getMemberships(community.id);
       if (remaining.length === 0) {
-        repo.clearInvites(community.id);
-        repo.clearMemberships(community.id);
-        repo.deleteCommunity(community.id);
-        repo.clearChannels(community.id);
-        repo.clearRoles(community.id);
+        await repo.clearInvites(community.id);
+        await repo.clearMemberships(community.id);
+        await repo.deleteCommunity(community.id);
+        await repo.clearChannels(community.id);
+        await repo.clearRoles(community.id);
       } else {
         community.memberCount = remaining.length;
       }
@@ -975,7 +986,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
       if (!ok) return;
 
       const { account } = (request as any).user;
-      const community = repo.getCommunity(request.params.communityId);
+      const community = await repo.getCommunity(request.params.communityId);
       if (!community) {
         return problem(
           reply,
@@ -985,7 +996,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
           request.url,
         );
       }
-      const membership = requireMembership(reply, community.id, account.id, request.url);
+      const membership = await requireMembership(reply, community.id, account.id, request.url);
       if (!membership) return;
       if (membership.role === 'member') {
         return problem(
@@ -1026,7 +1037,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
         },
         participants: [],
       };
-      repo.addChannel(channel);
+      await repo.addChannel(channel);
       hub.publish('channel.created', channel, community.id, account.id);
       return reply.code(201).send(channel);
     },
@@ -1039,7 +1050,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
       if (!ok) return;
 
       const { account } = (request as any).user;
-      const community = repo.getCommunity(request.params.communityId);
+      const community = await repo.getCommunity(request.params.communityId);
       if (!community) {
         return problem(
           reply,
@@ -1049,10 +1060,10 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
           request.url,
         );
       }
-      const membership = requireMembership(reply, community.id, account.id, request.url);
+      const membership = await requireMembership(reply, community.id, account.id, request.url);
       if (!membership) return;
 
-      const list = repo.getChannelsByCommunity(community.id);
+      const list = await repo.getChannelsByCommunity(community.id);
       return reply.code(200).send({ channels: list });
     },
   );
@@ -1065,7 +1076,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
       if (!ok) return;
 
       const { account } = (request as any).user;
-      const community = repo.getCommunity(request.params.communityId);
+      const community = await repo.getCommunity(request.params.communityId);
       if (!community) {
         return problem(
           reply,
@@ -1075,7 +1086,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
           request.url,
         );
       }
-      const membership = requireMembership(reply, community.id, account.id, request.url);
+      const membership = await requireMembership(reply, community.id, account.id, request.url);
       if (!membership) return;
       if (membership.role !== 'owner' && membership.role !== 'admin') {
         return problem(
@@ -1112,7 +1123,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
         permissions: permissions ?? [],
         createdAt: new Date().toISOString(),
       };
-      repo.addRole(role);
+      await repo.addRole(role);
       hub.publish('role.created', role, community.id, account.id);
       return reply.code(201).send(role);
     },
@@ -1125,7 +1136,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
       if (!ok) return;
 
       const { account } = (request as any).user;
-      const community = repo.getCommunity(request.params.communityId);
+      const community = await repo.getCommunity(request.params.communityId);
       if (!community) {
         return problem(
           reply,
@@ -1135,10 +1146,10 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
           request.url,
         );
       }
-      const membership = requireMembership(reply, community.id, account.id, request.url);
+      const membership = await requireMembership(reply, community.id, account.id, request.url);
       if (!membership) return;
 
-      const roles = repo.getRolesByCommunity(community.id);
+      const roles = await repo.getRolesByCommunity(community.id);
       return reply.code(200).send({ roles });
     },
   );
@@ -1150,7 +1161,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
       if (!ok) return;
 
       const { account } = (request as any).user;
-      const community = repo.getCommunity(request.params.communityId);
+      const community = await repo.getCommunity(request.params.communityId);
       if (!community) {
         return problem(
           reply,
@@ -1160,10 +1171,10 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
           request.url,
         );
       }
-      const membership = requireMembership(reply, community.id, account.id, request.url);
+      const membership = await requireMembership(reply, community.id, account.id, request.url);
       if (!membership) return;
 
-      const roles = repo.getRolesByCommunity(community.id);
+      const roles = await repo.getRolesByCommunity(community.id);
       const role = roles.find((r) => r.id === request.params.roleId);
       if (!role) {
         return problem(
@@ -1185,7 +1196,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
       if (!ok) return;
 
       const { account } = (request as any).user;
-      const community = repo.getCommunity(request.params.communityId);
+      const community = await repo.getCommunity(request.params.communityId);
       if (!community) {
         return problem(
           reply,
@@ -1195,7 +1206,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
           request.url,
         );
       }
-      const membership = requireMembership(reply, community.id, account.id, request.url);
+      const membership = await requireMembership(reply, community.id, account.id, request.url);
       if (!membership) return;
       if (membership.role !== 'owner' && membership.role !== 'admin') {
         return problem(
@@ -1218,7 +1229,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
         );
       }
 
-      const roles = repo.getRolesByCommunity(community.id);
+      const roles = await repo.getRolesByCommunity(community.id);
       const roleIndex = roles.findIndex((r) => r.id === request.params.roleId);
       if (roleIndex === -1) {
         return problem(
@@ -1254,7 +1265,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
         managed: false,
         createdAt: existingRole.createdAt,
       };
-      repo.updateRole(community.id, request.params.roleId, updatedRole);
+      await repo.updateRole(community.id, request.params.roleId, updatedRole);
       hub.publish('role.updated', updatedRole, community.id, account.id);
       return reply.code(200).send(updatedRole);
     },
@@ -1267,7 +1278,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
       if (!ok) return;
 
       const { account } = (request as any).user;
-      const community = repo.getCommunity(request.params.communityId);
+      const community = await repo.getCommunity(request.params.communityId);
       if (!community) {
         return problem(
           reply,
@@ -1277,7 +1288,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
           request.url,
         );
       }
-      const membership = requireMembership(reply, community.id, account.id, request.url);
+      const membership = await requireMembership(reply, community.id, account.id, request.url);
       if (!membership) return;
       if (membership.role !== 'owner') {
         return problem(
@@ -1289,7 +1300,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
         );
       }
 
-      const roles = repo.getRolesByCommunity(community.id);
+      const roles = await repo.getRolesByCommunity(community.id);
       const roleIndex = roles.findIndex((r) => r.id === request.params.roleId);
       if (roleIndex === -1) {
         return problem(
@@ -1306,8 +1317,8 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
         return problem(reply, 403, 'Forbidden', 'Managed roles cannot be deleted.', request.url);
       }
 
-      repo.deleteRole(community.id, role.id);
-      repo.removeRoleFromAllMembers(community.id, role.id);
+      await repo.deleteRole(community.id, role.id);
+      await repo.removeRoleFromAllMembers(community.id, role.id);
       hub.publish(
         'role.deleted',
         { roleId: role.id, communityId: community.id },
@@ -1325,7 +1336,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
       if (!ok) return;
 
       const { account } = (request as any).user;
-      const community = repo.getCommunity(request.params.communityId);
+      const community = await repo.getCommunity(request.params.communityId);
       if (!community) {
         return problem(
           reply,
@@ -1335,7 +1346,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
           request.url,
         );
       }
-      const actorMembership = requireMembership(reply, community.id, account.id, request.url);
+      const actorMembership = await requireMembership(reply, community.id, account.id, request.url);
       if (!actorMembership) return;
       if (actorMembership.role !== 'owner' && actorMembership.role !== 'admin') {
         return problem(
@@ -1347,7 +1358,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
         );
       }
 
-      const targetMembership = getMembership(community.id, request.params.memberId);
+      const targetMembership = await getMembership(community.id, request.params.memberId);
       if (!targetMembership) {
         return problem(
           reply,
@@ -1357,9 +1368,8 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
           request.url,
         );
       }
-      const role = repo
-        .getRolesByCommunity(community.id)
-        .find((candidate) => candidate.id === request.params.roleId);
+      const roles = await repo.getRolesByCommunity(community.id);
+      const role = roles.find((candidate) => candidate.id === request.params.roleId);
       if (!role) {
         return problem(
           reply,
@@ -1379,7 +1389,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
         );
       }
 
-      if (repo.assignRoleToMember(community.id, request.params.memberId, role.id)) {
+      if (await repo.assignRoleToMember(community.id, request.params.memberId, role.id)) {
         hub.publish(
           'member.role_assigned',
           { communityId: community.id, memberId: request.params.memberId, roleId: role.id },
@@ -1398,7 +1408,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
       if (!ok) return;
 
       const { account } = (request as any).user;
-      const community = repo.getCommunity(request.params.communityId);
+      const community = await repo.getCommunity(request.params.communityId);
       if (!community) {
         return problem(
           reply,
@@ -1408,7 +1418,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
           request.url,
         );
       }
-      const actorMembership = requireMembership(reply, community.id, account.id, request.url);
+      const actorMembership = await requireMembership(reply, community.id, account.id, request.url);
       if (!actorMembership) return;
       if (actorMembership.role !== 'owner' && actorMembership.role !== 'admin') {
         return problem(
@@ -1420,7 +1430,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
         );
       }
 
-      const targetMembership = getMembership(community.id, request.params.memberId);
+      const targetMembership = await getMembership(community.id, request.params.memberId);
       if (!targetMembership) {
         return problem(
           reply,
@@ -1430,9 +1440,8 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
           request.url,
         );
       }
-      const role = repo
-        .getRolesByCommunity(community.id)
-        .find((candidate) => candidate.id === request.params.roleId);
+      const roles = await repo.getRolesByCommunity(community.id);
+      const role = roles.find((candidate) => candidate.id === request.params.roleId);
       if (!role) {
         return problem(
           reply,
@@ -1443,7 +1452,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
         );
       }
 
-      repo.removeRoleFromMember(community.id, request.params.memberId, role.id);
+      await repo.removeRoleFromMember(community.id, request.params.memberId, role.id);
       hub.publish(
         'member.role_removed',
         { communityId: community.id, memberId: request.params.memberId, roleId: role.id },
@@ -1462,7 +1471,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
       if (!ok) return;
 
       const { account } = (request as any).user;
-      const community = repo.getCommunity(request.params.communityId);
+      const community = await repo.getCommunity(request.params.communityId);
       if (!community) {
         return problem(
           reply,
@@ -1472,7 +1481,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
           request.url,
         );
       }
-      const membership = requireMembership(reply, community.id, account.id, request.url);
+      const membership = await requireMembership(reply, community.id, account.id, request.url);
       if (!membership) return;
       if (membership.role !== 'owner' && membership.role !== 'admin') {
         return problem(
@@ -1514,7 +1523,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
         uses: 0,
       };
 
-      repo.addInvite(invite);
+      await repo.addInvite(invite);
 
       const url = `https://cove.chat/invite/${code}`;
 
@@ -1535,7 +1544,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
       if (!ok) return;
 
       const { account } = (request as any).user;
-      const community = repo.getCommunity(request.params.communityId);
+      const community = await repo.getCommunity(request.params.communityId);
       if (!community) {
         return problem(
           reply,
@@ -1545,7 +1554,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
           request.url,
         );
       }
-      const membership = requireMembership(reply, community.id, account.id, request.url);
+      const membership = await requireMembership(reply, community.id, account.id, request.url);
       if (!membership) return;
       if (membership.role !== 'owner' && membership.role !== 'admin') {
         return problem(
@@ -1557,13 +1566,12 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
         );
       }
 
-      const invites = repo
-        .getInvitesByCommunity(community.id)
-        .filter(
-          (invite) =>
-            new Date(invite.expiresAt).getTime() > Date.now() &&
-            (invite.maxUses === null || invite.uses < invite.maxUses),
-        );
+      const allInvites = await repo.getInvitesByCommunity(community.id);
+      const invites = allInvites.filter(
+        (invite) =>
+          new Date(invite.expiresAt).getTime() > Date.now() &&
+          (invite.maxUses === null || invite.uses < invite.maxUses),
+      );
       return reply.code(200).send({ invites });
     },
   );
@@ -1575,7 +1583,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
       if (!ok) return;
 
       const { account } = (request as any).user;
-      const community = repo.getCommunity(request.params.communityId);
+      const community = await repo.getCommunity(request.params.communityId);
       if (!community) {
         return problem(
           reply,
@@ -1585,7 +1593,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
           request.url,
         );
       }
-      const membership = requireMembership(reply, community.id, account.id, request.url);
+      const membership = await requireMembership(reply, community.id, account.id, request.url);
       if (!membership) return;
       if (membership.role !== 'owner' && membership.role !== 'admin') {
         return problem(
@@ -1597,7 +1605,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
         );
       }
 
-      const invites = repo.getInvitesByCommunity(community.id);
+      const invites = await repo.getInvitesByCommunity(community.id);
       const inviteMatch = invites.find((invite) => invite.id === request.params.inviteId);
       if (!inviteMatch) {
         return problem(
@@ -1608,7 +1616,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
           request.url,
         );
       }
-      repo.deleteInvite(community.id, request.params.inviteId);
+      await repo.deleteInvite(community.id, request.params.inviteId);
       hub.publish(
         'invite.revoked',
         { communityId: community.id, inviteId: request.params.inviteId },
@@ -1624,7 +1632,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
     if (!ok) return;
 
     const { account } = (request as any).user;
-    const invite = repo.getInviteByCode(request.params.code);
+    const invite = await repo.getInviteByCode(request.params.code);
     if (!invite) {
       return problem(
         reply,
@@ -1635,7 +1643,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
       );
     }
 
-    const community = repo.getCommunity(invite.communityId);
+    const community = await repo.getCommunity(invite.communityId);
     if (!community) {
       return problem(
         reply,
@@ -1647,7 +1655,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
     }
 
     // Check if already a member
-    const existingMember = repo.getMembership(community.id, account.id);
+    const existingMember = await repo.getMembership(community.id, account.id);
     if (existingMember) {
       return problem(
         reply,
@@ -1675,13 +1683,13 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
     }
 
     // Add member
-    repo.addMembership(community.id, { accountId: account.id, role: 'member', roleIds: [] });
-    community.memberCount = repo.getMemberships(community.id).length;
+    await repo.addMembership(community.id, { accountId: account.id, role: 'member', roleIds: [] });
+    community.memberCount = (await repo.getMemberships(community.id)).length;
     hub.grantCommunityAccess(account.id, community.id);
 
     // Update invite uses
     invite.uses += 1;
-    repo.updateInvite(invite);
+    await repo.updateInvite(invite);
 
     hub.publish(
       'member.joined',
@@ -1734,22 +1742,22 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
     return reply.code(200).send(decision);
   });
 
-  app.get('/v1/gateway', { websocket: true }, (socket, request) => {
+  app.get('/v1/gateway', { websocket: true }, async (socket, request) => {
     const requestUrl = new URL(request.url, 'http://localhost');
     const queryToken = requestUrl.searchParams.get('token');
     const authorization = request.headers.authorization;
     const headerToken = authorization?.startsWith('Bearer ')
       ? authorization.substring(7)
       : undefined;
-    const session = repo.getSession(queryToken ?? headerToken ?? '');
-    const gatewayAccount = session ? repo.getAccountByEmail(session.email) : undefined;
+    const session = await repo.getSession(queryToken ?? headerToken ?? '');
+    const gatewayAccount = session ? await repo.getAccountByEmail(session.email) : undefined;
     const accessibleCommunityIds = new Set<string>();
     if (gatewayAccount) {
-      for (const community of repo.listCommunitiesForAccount(gatewayAccount.id)) {
+      for (const community of await repo.listCommunitiesForAccount(gatewayAccount.id)) {
         accessibleCommunityIds.add(community.id);
       }
     }
-    hub.connect(socket, currentBootstrap(), gatewayAccount?.id, accessibleCommunityIds);
+    hub.connect(socket, await currentBootstrap(), gatewayAccount?.id, accessibleCommunityIds);
     socket.on('message', (raw) => {
       let decoded: unknown;
       try {

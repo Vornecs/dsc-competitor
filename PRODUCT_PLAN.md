@@ -1,10 +1,10 @@
 # Cove Product Plan
 
-> Last updated: 2026-06-29 | Cycle: 8 | Phase: 1 — Core Features | Build health: verified; Repository storage abstraction layer and memory-repository implementation verified
+> Last updated: 2026-06-29 | Cycle: 9 | Phase: 1 — Core Features | Build health: verified; PostgreSQL schema, adapter, and async repository interface implemented
 >
-> Current objective: Cycle 8 implemented repository storage abstraction layer (Repository interface) and InMemoryRepository adapter. Refactored app routing to operate through repository interface and verified correctness via full test suite compatibility.
+> Current objective: Cycle 9 made the Repository interface fully async, added an initial PostgreSQL schema (001_initial.sql) with 10 tables covering accounts, challenges, passkeys, sessions, communities, memberships, channels, roles, invites, messages, and idempotency; implemented a createPostgresRepository adapter using node-postgres; wired DATABASE_URL-driven repository selection into index.ts and preview.ts; added docker-compose.yml for local PostgreSQL 17 development.
 >
-> Next gate: add an initial PostgreSQL schema/migration, implement PostgreSQL repository adapter, and integrate PostgreSQL persistence.
+> Next gate: add an initial Redis coordination layer for gateway session state, or begin the attachment pipeline (managed messages with file uploads, quarantine, and S3-compatible storage).
 
 This file is the authoritative product, architecture, and delivery record. A behavior or scope change is incomplete until this file is reconciled in the same work cycle.
 
@@ -163,15 +163,16 @@ Administrator bypass never applies to ownership, billing, security, or private m
 | P1-001 | verified    | Passkey & email auth / sessions                    | Email request/verify codes, WebAuthn options/verification, device session lists/revocation.                                                                      | Vitest integration test covers email verify/retry, registration/login options, session listing, and revocation.                                                                                                                                                                                                |
 | P1-002 | verified    | Communities, channels, memberships, roles, invites | Community CRUD, channel CRUD within communities, join/leave membership, role CRUD, invite creation/management, owner-leave guard, permission simulator endpoint. | 26 core tests pass: community create/list/get, membership join/leave, channel create/list, role CRUD, invite create/list/join, permission simulator precedence/owner-only. Typecheck, build, format clean. 0 production vulns.                                                                                 |
 | P1-003 | verified    | Permission-dependent message routing               | Authenticated message reads/writes filtered by channel permissions and role assignments.                                                                         | Message read/write tests with permission enforcement; 26 core tests pass, message read/write gated by permission engine and roles.                                                                                                                                                                             |
+| P1-004 | implemented | PostgreSQL persistence                             | Initial PostgreSQL schema (10 tables), pg-based repository adapter, DATABASE_URL-driven repository selection, docker-compose for local dev.                      | 54 tests pass (10 contracts + 14 desktop + 4 web + 26 core); typecheck, build (86.41 kB gzip), and format clean. Repository interface is fully async; memory adapter remains default for tests; postgres adapter activated via DATABASE_URL env.                                                              |
 
 ## Quality dashboard
 
 | Area             | Current          | Gate                                                                                                                                                                    |
 | ---------------- | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Install          | verified         | `npm install` completed and generated a locked workspace graph.                                                                                                         |
-| Unit tests       | verified         | 43 tests pass: 4 web, 21 core (communities/channels/memberships/roles/invites), 4 contract/permission, 14 desktop (3 gate + 11 PTT), 0 ui.                              |
+| Unit tests       | verified         | 54 tests pass: 4 web, 26 core, 10 contracts, 14 desktop (3 gate + 11 PTT), 0 ui.                                                                                       |
 | Type safety      | verified         | All five workspaces pass strict TypeScript.                                                                                                                             |
-| Production build | verified         | Client output is 86.12 kB gzip JavaScript and 4.20 kB gzip CSS.                                                                                                         |
+| Production build | verified         | Client output is 86.41 kB gzip JavaScript and 4.20 kB gzip CSS.                                                                                                         |
 | API integration  | verified         | Health, bootstrap, authenticated community/role/invite mutations, permission simulator, gateway, device sessions, integrated HTML, and assets pass.                     |
 | Accessibility    | partial          | Semantic UI tests and accessible modes exist; real-browser review remains blocked.                                                                                      |
 | Performance      | partial          | Electron renderer loaded in 2.392 s once; a 464 MB summed startup working-set snapshot signals risk. PTT harness UI added; warm/idle p95 and soak remain unmeasured.    |
@@ -280,3 +281,15 @@ Administrator bypass never applies to ownership, billing, security, or private m
 - Delivered: refactored `services/core/src/index.ts` and `services/core/src/preview.ts` to instantiate and inject the memory repository into `buildApp()`.
 - Verification: 49 tests pass (26 core, 5 contracts, 4 web, 14 desktop); all five workspaces pass strict TypeScript; production build succeeds at 86.15 kB gzip JS; formatting clean; 0 production vulnerabilities.
 - Next: add an initial PostgreSQL schema/migration, implement PostgreSQL repository adapter, and integrate PostgreSQL persistence.
+
+### Cycle 9 — 2026-06-29 — completed
+
+- Objective: add PostgreSQL persistence — schema, adapter, and DATABASE_URL-driven wiring — making the Repository interface fully async.
+- Delivered: `services/core/schema/001_initial.sql` — initial PostgreSQL schema with 10 tables (accounts, email_challenges, passkeys, sessions, communities, memberships, channels, roles, invites, messages, idempotency) with appropriate indexes, foreign keys, and cascade deletes.
+- Delivered: `services/core/src/postgres-repository.ts` — `createPostgresRepository(pool)` implementing the full Repository interface against PostgreSQL via `node-postgres` (pg).
+- Delivered: `docker-compose.yml` at repo root — PostgreSQL 17 Alpine with schema auto-load, health check, and persistent volume for local development.
+- Delivered: `services/core/src/index.ts` and `preview.ts` updated — when `DATABASE_URL` env is set, the app creates a pg Pool and uses the PostgreSQL adapter; otherwise falls back to the in-memory adapter.
+- Refactored: Repository interface made fully async (all methods return Promises). Memory adapter updated with async wrappers. All 30+ route handlers and helper functions in app.ts updated to await repository calls.
+- Added: `pg` and `@types/pg` dependencies to `@cove/core`.
+- Verification: 54 tests pass (26 core, 10 contracts, 4 web, 14 desktop); all five workspaces pass strict TypeScript; production build 86.41 kB gzip JS / 4.20 kB gzip CSS; Prettier clean; 0 production vulnerabilities.
+- Next: add Redis coordination for gateway session state, or begin the attachment pipeline (file uploads, quarantine, S3-compatible storage).

@@ -46,67 +46,67 @@ export interface EmailChallenge {
 
 export interface Repository {
   // -- Accounts -------------------------------------------------------------
-  getAccountByEmail(email: string): Account | undefined;
-  setAccount(email: string, account: Account): void;
+  getAccountByEmail(email: string): Promise<Account | undefined>;
+  setAccount(email: string, account: Account): Promise<void>;
 
   // -- Email challenges -----------------------------------------------------
-  getEmailChallenge(key: string): EmailChallenge | undefined;
-  setEmailChallenge(key: string, challenge: EmailChallenge): void;
-  deleteEmailChallenge(key: string): void;
+  getEmailChallenge(key: string): Promise<EmailChallenge | undefined>;
+  setEmailChallenge(key: string, challenge: EmailChallenge): Promise<void>;
+  deleteEmailChallenge(key: string): Promise<void>;
 
   // -- Passkeys -------------------------------------------------------------
-  getPasskeys(email: string): PasskeyCredential[];
-  addPasskey(email: string, credential: PasskeyCredential): void;
+  getPasskeys(email: string): Promise<PasskeyCredential[]>;
+  addPasskey(email: string, credential: PasskeyCredential): Promise<void>;
 
   // -- Sessions -------------------------------------------------------------
-  getSession(token: string): SessionRecord | undefined;
-  setSession(token: string, session: SessionRecord): void;
-  deleteSession(token: string): void;
-  listSessionsByEmail(email: string): Array<{ token: string; session: SessionRecord }>;
+  getSession(token: string): Promise<SessionRecord | undefined>;
+  setSession(token: string, session: SessionRecord): Promise<void>;
+  deleteSession(token: string): Promise<void>;
+  listSessionsByEmail(email: string): Promise<Array<{ token: string; session: SessionRecord }>>;
 
   // -- Communities ----------------------------------------------------------
-  getCommunity(id: string): Community | undefined;
-  setCommunity(community: Community): void;
-  deleteCommunity(id: string): void;
-  listCommunitiesForAccount(accountId: string): Community[];
+  getCommunity(id: string): Promise<Community | undefined>;
+  setCommunity(community: Community): Promise<void>;
+  deleteCommunity(id: string): Promise<void>;
+  listCommunitiesForAccount(accountId: string): Promise<Community[]>;
 
   // -- Memberships ----------------------------------------------------------
-  getMemberships(communityId: string): Membership[];
-  getMembership(communityId: string, accountId: string): Membership | undefined;
-  addMembership(communityId: string, membership: Membership): void;
-  removeMembership(communityId: string, accountId: string): void;
-  clearMemberships(communityId: string): void;
+  getMemberships(communityId: string): Promise<Membership[]>;
+  getMembership(communityId: string, accountId: string): Promise<Membership | undefined>;
+  addMembership(communityId: string, membership: Membership): Promise<void>;
+  removeMembership(communityId: string, accountId: string): Promise<void>;
+  clearMemberships(communityId: string): Promise<void>;
 
   // -- Channels -------------------------------------------------------------
-  getChannelsByCommunity(communityId: string): Channel[];
-  addChannel(channel: Channel): void;
-  clearChannels(communityId: string): void;
-  findChannelById(channelId: string): Channel | undefined;
+  getChannelsByCommunity(communityId: string): Promise<Channel[]>;
+  addChannel(channel: Channel): Promise<void>;
+  clearChannels(communityId: string): Promise<void>;
+  findChannelById(channelId: string): Promise<Channel | undefined>;
 
   // -- Roles ----------------------------------------------------------------
-  getRolesByCommunity(communityId: string): Role[];
-  addRole(role: Role): void;
-  updateRole(communityId: string, roleId: string, updatedRole: Role): void;
-  deleteRole(communityId: string, roleId: string): void;
-  clearRoles(communityId: string): void;
+  getRolesByCommunity(communityId: string): Promise<Role[]>;
+  addRole(role: Role): Promise<void>;
+  updateRole(communityId: string, roleId: string, updatedRole: Role): Promise<void>;
+  deleteRole(communityId: string, roleId: string): Promise<void>;
+  clearRoles(communityId: string): Promise<void>;
 
   // -- Role assignments (on memberships) ------------------------------------
-  assignRoleToMember(communityId: string, memberId: string, roleId: string): boolean;
-  removeRoleFromMember(communityId: string, memberId: string, roleId: string): void;
-  removeRoleFromAllMembers(communityId: string, roleId: string): void;
+  assignRoleToMember(communityId: string, memberId: string, roleId: string): Promise<boolean>;
+  removeRoleFromMember(communityId: string, memberId: string, roleId: string): Promise<void>;
+  removeRoleFromAllMembers(communityId: string, roleId: string): Promise<void>;
 
   // -- Invites --------------------------------------------------------------
-  getInvitesByCommunity(communityId: string): Invite[];
-  getInviteByCode(code: string): Invite | undefined;
-  addInvite(invite: Invite): void;
-  updateInvite(invite: Invite): void;
-  deleteInvite(communityId: string, inviteId: string): void;
-  deleteInviteByCode(code: string): void;
-  clearInvites(communityId: string): void;
+  getInvitesByCommunity(communityId: string): Promise<Invite[]>;
+  getInviteByCode(code: string): Promise<Invite | undefined>;
+  addInvite(invite: Invite): Promise<void>;
+  updateInvite(invite: Invite): Promise<void>;
+  deleteInvite(communityId: string, inviteId: string): Promise<void>;
+  deleteInviteByCode(code: string): Promise<void>;
+  clearInvites(communityId: string): Promise<void>;
 
   // -- Messages -------------------------------------------------------------
-  getMessagesByChannel(channelId: string): Message[];
-  addMessage(message: Message): void;
-  getIdempotentMessage(key: string): Message | undefined;
-  setIdempotentMessage(key: string, message: Message): void;
+  getMessagesByChannel(channelId: string): Promise<Message[]>;
+  addMessage(message: Message): Promise<void>;
+  getIdempotentMessage(key: string): Promise<Message | undefined>;
+  setIdempotentMessage(key: string, message: Message): Promise<void>;
 }
