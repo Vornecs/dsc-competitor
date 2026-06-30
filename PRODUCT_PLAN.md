@@ -1,10 +1,10 @@
 # Cove Product Plan
 
-> Last updated: 2026-06-29 | Cycle: 12 | Phase: 1 — Core Features | Build health: verified; managed message lifecycle and private read state live
+> Last updated: 2026-06-29 | Cycle: 13 | Phase: 1 — Core Features | Build health: verified; ordered migration runner and same-channel replies live
 >
-> Current objective: Cycle 12 delivered author-only message edits, author/moderator soft-deletes, permission-gated reactions, private per-account read state, and metadata-only audit events across memory and PostgreSQL storage.
+> Current objective: Cycle 13 delivered an ordered, idempotent PostgreSQL migration runner with a `schema_migrations` ledger table, `004_replies.sql` for the reply FK column, `replyToId` and `replyPreview` on the message contract, same-channel reply enforcement in the send route, and 5 migration runner unit tests.
 >
-> Next gate: ordered startup migration execution for existing PostgreSQL databases, followed by same-channel message replies.
+> Next gate: attention-center items for reply notifications (attentionItemSchema kind: 'reply'), followed by community member presence (online/idle/DnD broadcast on gateway connect/disconnect).
 
 This file is the authoritative product, architecture, and delivery record. A behavior or scope change is incomplete until this file is reconciled in the same work cycle.
 
@@ -167,16 +167,17 @@ Administrator bypass never applies to ownership, billing, security, or private m
 | P1-004 | implemented | PostgreSQL persistence                             | Initial PostgreSQL schema (10 tables), pg-based repository adapter, DATABASE_URL-driven repository selection, docker-compose for local dev.                                                                                                                       | 54 tests pass (10 contracts + 14 desktop + 4 web + 26 core); typecheck, build (86.41 kB gzip), and format clean. Repository interface is fully async; memory adapter remains default for tests; postgres adapter activated via DATABASE_URL env.                                                               |
 | P1-005 | verified    | Attachment pipeline                                | Two-phase upload (initiate metadata → PUT raw body), per-MIME allowlist (images, video/mp4/webm, audio, pdf, zip, text), 25 MB cap, quarantine status (auto-approve in dev), binary serve endpoint, message `attachmentIds` resolution, PostgreSQL migration 002. | 64 tests pass (36 core + 10 contracts + 4 web + 14 desktop); strict typecheck, build 86.49 kB gzip, format clean, 0 production vulns. 5 new attachment tests covering initiate/upload/serve/duplicate/message-resolution.                                                                                      |
 | P1-006 | verified    | Managed message lifecycle and audit trail          | Author-only edits; author or `message.manage` soft-deletes; idempotent permission-gated reactions; private per-account read state; metadata-only audit events; gateway/client reconciliation; PostgreSQL migration 003.                                           | 69 tests pass (39 core + 11 contracts + 5 web + 14 desktop); strict typecheck; production build 87.55 kB gzip JS / 4.20 kB gzip CSS; format clean; production and full audits report 0 vulnerabilities.                                                                                                        |
+| P1-007 | verified    | Ordered migration runner and same-channel replies  | `runMigrations(pool)` creates `schema_migrations` ledger, runs pending `.sql` files in filename order inside transactions, rolls back on failure; `004_replies.sql` adds `reply_to_id` FK; `replyToId` + `replyPreview` on message contract and send route.      | 75 tests pass (45 core + 11 contracts + 5 web + 14 desktop); strict typecheck; production build 87.60 kB gzip JS / 4.20 kB gzip CSS; format clean; 0 production vulnerabilities.                                                                                                                               |
 
 ## Quality dashboard
 
 | Area             | Current          | Gate                                                                                                                                                                             |
 | ---------------- | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Install          | verified         | `npm install` completed and generated a locked workspace graph.                                                                                                                  |
-| Unit tests       | verified         | 69 tests pass: 5 web, 39 core, 11 contracts, 14 desktop (3 gate + 11 PTT), 0 ui.                                                                                                 |
+| Unit tests       | verified         | 75 tests pass: 5 web, 45 core (5 migration runner + 1 reply), 11 contracts, 14 desktop (3 gate + 11 PTT), 0 ui.                                                                   |
 | Type safety      | verified         | All five workspaces pass strict TypeScript.                                                                                                                                      |
-| Production build | verified         | Client output is 87.55 kB gzip JavaScript and 4.20 kB gzip CSS.                                                                                                                  |
-| API integration  | verified         | Health, bootstrap, authenticated community/role/invite/message lifecycle mutations, audit reads, private read state, gateway, device sessions, integrated HTML, and assets pass. |
+| Production build | verified         | Client output is 87.60 kB gzip JavaScript and 4.20 kB gzip CSS.                                                                                                                  |
+| API integration  | verified         | Health, bootstrap, authenticated community/role/invite/message lifecycle mutations, audit reads, private read state, same-channel replies, gateway, device sessions, integrated HTML, and assets pass. |
 | Accessibility    | partial          | Semantic UI tests and accessible modes exist; real-browser review remains blocked.                                                                                               |
 | Performance      | partial          | Electron renderer loaded in 2.392 s once; a 464 MB summed startup working-set snapshot signals risk. PTT harness UI added; warm/idle p95 and soak remain unmeasured.             |
 | Security         | baseline partial | CSP, headers, runtime schemas, redacted logs, metadata-only message audit events, threat model, and 0 vulnerabilities in both production and full dependency audits.             |
@@ -275,6 +276,20 @@ Administrator bypass never applies to ownership, billing, security, or private m
 - Known dependency blocker: the full audit still reports 5 high-severity build-time `tar` dependency findings through `electron-rebuild`; the available forced fix is a breaking downgrade and was not applied. Runtime production dependencies remain clean.
 - External blockers unchanged: participant research, LiveKit credentials, interactive Windows media/PTT measurements, Tauri toolchain approval, code signing, browser-policy QA, and external legal/security review.
 - Exact next task: add an initial PostgreSQL schema/migration and storage interfaces for accounts, sessions, communities, memberships, channels, roles, role assignments, and invites; migrate the current routes behind repository adapters while keeping an in-memory adapter for deterministic tests.
+
+### Cycle 13 — 2026-06-29 — completed
+
+- Objective: add ordered startup migration runner and same-channel message replies.
+- Delivered: `services/core/src/migrations.ts` — `runMigrations(pool)` creates `schema_migrations` ledger, reads `schema/*.sql` files in filename order, executes each pending migration in a transaction, records it in the ledger, and rolls back with an error on failure.
+- Delivered: `services/core/schema/004_replies.sql` — `ALTER TABLE messages ADD COLUMN IF NOT EXISTS reply_to_id TEXT REFERENCES messages(id) ON DELETE SET NULL` plus index.
+- Delivered: `replyToId: string | undefined` and `replyPreview: { id, content, authorDisplayName, availability } | undefined` added to `messageSchema` and `messageReplyPreviewSchema` in `@cove/contracts`.
+- Delivered: `replyToId` optional field on `sendMessageRequestSchema`; send route validates the parent message exists and belongs to the same channel, then embeds a `replyPreview` snapshot; cross-channel and nonexistent-parent attempts return 400.
+- Delivered: `runMigrations` wired into `services/core/src/index.ts` before `buildApp()` when `DATABASE_URL` is set.
+- Delivered: `services/core/src/migrations.test.ts` — 5 unit tests: ledger-table creation, all-pending run in order, partial-apply skip, idempotent no-op, and rollback-on-failure.
+- Verification: 75 tests pass (45 core + 11 contracts + 5 web + 14 desktop); all five workspaces pass strict TypeScript; production build 87.60 kB gzip JS / 4.20 kB gzip CSS; Prettier clean; production and full dependency audits both report 0 vulnerabilities.
+- Verification limitation: Docker Desktop's Linux daemon was not running, so migration 004 was not executed against a live PostgreSQL instance. The SQL, runner logic, and FK column are wired correctly; live execution remains gated on Docker availability.
+- External blockers unchanged: participant research, LiveKit credentials, interactive Windows media/PTT measurements, Tauri toolchain approval, code signing, browser-policy QA, and external legal/security review.
+- Exact next task: attention-center reply notifications (add reply events to `attentionItemSchema` gateway fanout), then community member presence (online/idle/DnD broadcast on gateway connect/disconnect).
 
 ### Cycle 12 — 2026-06-29 — completed
 
