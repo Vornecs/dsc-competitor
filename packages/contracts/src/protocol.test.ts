@@ -21,6 +21,7 @@ import {
   stageParticipantsSchema,
   screenShareStartedSchema,
   screenShareEndedSchema,
+  stageSpeakingStateSchema,
   createChannelRequestSchema,
 } from './index.js';
 
@@ -402,6 +403,26 @@ describe('voice participant event contracts', () => {
 });
 
 describe('stage and screen-share contracts', () => {
+  it('validates keybind-gated stage speaking state', () => {
+    const result = stageSpeakingStateSchema.safeParse({
+      channelId: 'stage-1',
+      participantId: 'acc-1',
+      participantRole: 'speaker',
+      active: true,
+      mediaSession: {
+        token: 'token',
+        url: 'wss://media.example',
+        roomName: 'room-stage-1',
+        participantId: 'acc-1',
+        canPublish: true,
+      },
+    });
+    expect(result.success).toBe(true);
+    expect(stageSpeakingStateSchema.safeParse({ channelId: 'stage-1', active: 'yes' }).success).toBe(
+      false,
+    );
+  });
+
   it('validates stageParticipantsSchema', () => {
     const result = stageParticipantsSchema.safeParse({
       channelId: 'stage-1',

@@ -2764,7 +2764,7 @@ describe('stage broadcast subchannels and screen share', () => {
     expect(Array.isArray(peek.screenShares)).toBe(true);
   });
 
-  it('returns participantRole=speaker when joining a stage channel', async () => {
+  it('joins a stage listen-only, then gates publish credentials on stage.speak', async () => {
     const app = await buildApp();
     apps.push(app);
     const { token, stageChannelId } = await setup(app);
@@ -2775,7 +2775,60 @@ describe('stage broadcast subchannels and screen share', () => {
       headers: { authorization: `Bearer ${token}` },
     });
     expect(joinRes.statusCode).toBe(200);
-    expect(joinRes.json().participantRole).toBe('speaker');
+    expect(joinRes.json().participantRole).toBe('listener');
+    expect(joinRes.json().canPublish).toBe(false);
+
+    const pressRes = await app.inject({
+      method: 'POST',
+      url: `/v1/channels/${stageChannelId}/stage/speaking`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { active: true },
+    });
+    expect(pressRes.statusCode).toBe(200);
+    expect(pressRes.json()).toMatchObject({
+      channelId: stageChannelId,
+      participantRole: 'speaker',
+      active: true,
+      mediaSession: { canPublish: true },
+    });
+
+    const releaseRes = await app.inject({
+      method: 'POST',
+      url: `/v1/channels/${stageChannelId}/stage/speaking`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { active: false },
+    });
+    expect(releaseRes.statusCode).toBe(200);
+    expect(releaseRes.json()).toMatchObject({
+      participantRole: 'listener',
+      active: false,
+      mediaSession: { canPublish: false },
+    });
+  });
+
+  it('denies stage audio promotion without stage.speak', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const { communityId, stageChannelId } = await setup(app);
+    const { token: memberToken } = await getAuth(app);
+    await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/join`,
+      headers: { authorization: `Bearer ${memberToken}` },
+    });
+    await app.inject({
+      method: 'POST',
+      url: `/v1/channels/${stageChannelId}/voice/join`,
+      headers: { authorization: `Bearer ${memberToken}` },
+    });
+
+    const denied = await app.inject({
+      method: 'POST',
+      url: `/v1/channels/${stageChannelId}/stage/speaking`,
+      headers: { authorization: `Bearer ${memberToken}` },
+      payload: { active: true },
+    });
+    expect(denied.statusCode).toBe(403);
   });
 
   it('returns participantRole=listener when joining a stage subchannel', async () => {

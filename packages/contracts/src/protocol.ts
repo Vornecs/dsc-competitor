@@ -387,6 +387,7 @@ export const voiceSessionSchema = z.object({
   roomName: z.string().min(1),
   participantId: z.string().min(1),
   participantRole: z.enum(['speaker', 'listener']).optional(),
+  canPublish: z.boolean().optional(),
 });
 export type VoiceSession = z.infer<typeof voiceSessionSchema>;
 
@@ -402,6 +403,15 @@ export const stageParticipantsSchema = z.object({
   ),
 });
 export type StageParticipants = z.infer<typeof stageParticipantsSchema>;
+
+export const stageSpeakingStateSchema = z.object({
+  channelId: z.string().min(1),
+  participantId: z.string().min(1),
+  participantRole: z.enum(['speaker', 'listener']),
+  active: z.boolean(),
+  mediaSession: voiceSessionSchema,
+});
+export type StageSpeakingState = z.infer<typeof stageSpeakingStateSchema>;
 
 export const screenShareStartedSchema = z.object({
   channelId: z.string().min(1),

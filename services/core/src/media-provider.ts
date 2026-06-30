@@ -1,7 +1,18 @@
 import type { VoiceSession } from '@cove/contracts';
 
 export interface MediaProvider {
-  createJoinToken(channelId: string, accountId: string, displayName: string): Promise<VoiceSession>;
+  createJoinToken(
+    channelId: string,
+    accountId: string,
+    displayName: string,
+    options?: { canPublish?: boolean },
+  ): Promise<VoiceSession>;
+  setPublishPermission(
+    channelId: string,
+    accountId: string,
+    displayName: string,
+    canPublish: boolean,
+  ): Promise<VoiceSession>;
 }
 
 export class FakeMediaProvider implements MediaProvider {
@@ -9,13 +20,24 @@ export class FakeMediaProvider implements MediaProvider {
     channelId: string,
     accountId: string,
     displayName: string,
+    options: { canPublish?: boolean } = {},
   ): Promise<VoiceSession> {
     return {
       token: `fake-token-${channelId}-${accountId}`,
       url: 'ws://localhost:7880',
       roomName: `room-${channelId}`,
       participantId: accountId,
+      canPublish: options.canPublish ?? true,
     };
+  }
+
+  async setPublishPermission(
+    channelId: string,
+    accountId: string,
+    displayName: string,
+    canPublish: boolean,
+  ): Promise<VoiceSession> {
+    return this.createJoinToken(channelId, accountId, displayName, { canPublish });
   }
 }
 
@@ -43,10 +65,20 @@ export class LiveKitMediaProvider implements MediaProvider {
     channelId: string,
     accountId: string,
     displayName: string,
+    options: { canPublish?: boolean } = {},
   ): Promise<VoiceSession> {
     // In a future cycle when credentials are unblocked, we would use the livekit-server-sdk
     // to sign a real token here. For now, since the constructor throws when credentials
     // are missing, this path is blocked.
+    throw new Error('LiveKit media provider is blocked: credentials unavailable.');
+  }
+
+  async setPublishPermission(
+    channelId: string,
+    accountId: string,
+    displayName: string,
+    canPublish: boolean,
+  ): Promise<VoiceSession> {
     throw new Error('LiveKit media provider is blocked: credentials unavailable.');
   }
 }

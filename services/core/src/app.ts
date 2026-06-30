@@ -2499,9 +2499,9 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
         }
       }
 
-      // Determine participant role: listener when joining any subchannel, speaker otherwise
+      // Stage entry is listen-only until an authorized keybind press promotes the participant.
       const participantRole: 'speaker' | 'listener' =
-        channel.parentChannelId !== undefined ? 'listener' : 'speaker';
+        channel.kind === 'stage' || channel.parentChannelId !== undefined ? 'listener' : 'speaker';
 
       // Add user to the target voice/stage channel participants
       const participant: Participant = {
@@ -2529,9 +2529,91 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
         channel.id,
         actor.id,
         actor.displayName,
+        { canPublish: participantRole === 'speaker' },
       );
 
       return reply.code(200).send({ ...mediaSession, participantRole });
+    },
+  );
+
+  app.post<{ Params: { channelId: string }; Body: { active?: boolean } }>(
+    '/v1/channels/:channelId/stage/speaking',
+    async (request, reply) => {
+      const ok = await requireAuth(request, reply);
+      if (!ok) return;
+
+      const { account: actor } = (request as any).user;
+      const stage = await findDynamicChannel(request.params.channelId);
+      if (!stage || stage.kind !== 'stage') {
+        return problem(
+          reply,
+          404,
+          'Stage channel not found',
+          'The requested stage channel does not exist.',
+          request.url,
+        );
+      }
+      const membership = await requireMembership(reply, stage.communityId, actor.id, request.url);
+      if (!membership) return;
+
+      const active = request.body?.active;
+      if (typeof active !== 'boolean') {
+        return problem(
+          reply,
+          400,
+          'Invalid speaking state',
+          'The active field must be a boolean.',
+          request.url,
+        );
+      }
+      if (active) {
+        const decision = await requirePermission(
+          reply,
+          stage.communityId,
+          membership,
+          actor.id,
+          'stage.speak',
+          request.url,
+        );
+        if (!decision) return;
+      }
+
+      const channels = await repo.getChannelsByCommunity(stage.communityId);
+      const joined = channels.find(
+        (channel) =>
+          (channel.id === stage.id || channel.parentChannelId === stage.id) &&
+          channel.participants.some((participant) => participant.id === actor.id),
+      );
+      if (!joined) {
+        return problem(
+          reply,
+          409,
+          'Not listening to stage',
+          'Join the stage or one of its subchannels before changing speaking state.',
+          request.url,
+        );
+      }
+
+      const participantRole = active ? 'speaker' : 'listener';
+      joined.participants = joined.participants.map((participant) =>
+        participant.id === actor.id ? { ...participant, participantRole } : participant,
+      );
+      await repo.addChannel(joined);
+      const mediaSession = await mediaProvider.setPublishPermission(
+        joined.id,
+        actor.id,
+        actor.displayName,
+        active,
+      );
+      const state = {
+        channelId: stage.id,
+        participantId: actor.id,
+        participantRole,
+        active,
+        mediaSession,
+      };
+      hub.publish('stage.speaking.updated', state, stage.communityId, actor.id);
+      return reply.code(200).send(state);
     },
   );
 
