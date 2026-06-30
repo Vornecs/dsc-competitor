@@ -4,6 +4,8 @@ import { describe, expect, it } from 'vitest';
 import { demoBootstrap } from '@cove/contracts';
 import {
   App,
+  dismissAttentionItem,
+  markAllAttentionRead,
   reconcileAttentionItem,
   reconcileAuditLog,
   reconcileMessageUpdate,
@@ -182,5 +184,23 @@ describe('application shell', () => {
     // Other channels are unaffected
     const textChannel = demoBootstrap.channels.find((c) => c.kind === 'text')!;
     expect(asListener.find((c) => c.id === textChannel.id)).toEqual(textChannel);
+  });
+
+  it('dismisses a single attention item by id', () => {
+    const a = demoBootstrap.attention[0]!;
+    const b = { ...a, id: 'item-b' };
+    expect(dismissAttentionItem([a, b], a.id)).toEqual([b]);
+    expect(dismissAttentionItem([a, b], 'unknown')).toEqual([a, b]);
+    expect(dismissAttentionItem([], a.id)).toEqual([]);
+  });
+
+  it('marks all attention items as read', () => {
+    const unread = { ...demoBootstrap.attention[0]!, unread: true, id: 'item-u1' };
+    const alreadyRead = { ...demoBootstrap.attention[0]!, unread: false, id: 'item-u2' };
+    const result = markAllAttentionRead([unread, alreadyRead]);
+    expect(result.every((i) => !i.unread)).toBe(true);
+    expect(result).toHaveLength(2);
+    // Identity is preserved for items already read
+    expect(result[1]).toBe(alreadyRead);
   });
 });

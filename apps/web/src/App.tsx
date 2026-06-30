@@ -50,6 +50,8 @@ import {
   Volume2,
   MicOff,
   VolumeX,
+  BellOff,
+  X,
 } from 'lucide-react';
 import { Room, RoomEvent, Track } from 'livekit-client';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -110,6 +112,14 @@ export function reconcileAttentionItem(
   incoming: AttentionItem,
 ): AttentionItem[] {
   return [incoming, ...current.filter((item) => item.id !== incoming.id)];
+}
+
+export function dismissAttentionItem(current: AttentionItem[], id: string): AttentionItem[] {
+  return current.filter((item) => item.id !== id);
+}
+
+export function markAllAttentionRead(current: AttentionItem[]): AttentionItem[] {
+  return current.map((item) => (item.unread ? { ...item, unread: false } : item));
 }
 
 export function reconcileVoiceJoin(
@@ -299,6 +309,16 @@ export function App() {
   } | null>(null);
   const [peekParticipants, setPeekParticipants] = useState<StageParticipants | null>(null);
 
+  const [mutedChannelIds, setMutedChannelIds] = useState<Set<string>>(() => {
+    if (import.meta.env.MODE === 'test') return new Set();
+    try {
+      const stored = localStorage.getItem('cove_muted_channels');
+      return stored ? new Set<string>(JSON.parse(stored) as string[]) : new Set();
+    } catch {
+      return new Set();
+    }
+  });
+
   const [showLoginModal, setShowLoginModal] = useState(false);
   const [loginEmail, setLoginEmail] = useState('');
   const [loginCode, setLoginCode] = useState('');
@@ -313,6 +333,21 @@ export function App() {
     setBootstrap(demoBootstrap);
     setMessages(demoBootstrap.messages);
     setConnection('preview');
+  }
+
+  function toggleChannelMute(channelId: string) {
+    setMutedChannelIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(channelId)) {
+        next.delete(channelId);
+      } else {
+        next.add(channelId);
+      }
+      try {
+        localStorage.setItem('cove_muted_channels', JSON.stringify([...next]));
+      } catch {}
+      return next;
+    });
   }
 
   async function handleSendCode(e: React.FormEvent) {
@@ -549,6 +584,7 @@ export function App() {
       if (frame.op === 'EVENT' && frame.data.type === 'attention.item.created') {
         const item = attentionItemSchema.safeParse(frame.data.data);
         if (item.success) {
+          if (item.data.channelId && mutedChannelIds.has(item.data.channelId)) return;
           setBootstrap((current) => ({
             ...current,
             attention: reconcileAttentionItem(current.attention, item.data),
@@ -1608,22 +1644,72 @@ export function App() {
               <section className="attention-preview">
                 <header>
                   <span>Attention</span>
-                  <button type="button">View all</button>
+                  <button
+                    type="button"
+                    aria-label="Mark all as read"
+                    title="Mark all as read"
+                    disabled={!bootstrap.attention.some((a) => a.unread)}
+                    onClick={() =>
+                      setBootstrap((current) => ({
+                        ...current,
+                        attention: markAllAttentionRead(current.attention),
+                      }))
+                    }
+                  >
+                    Mark all read
+                  </button>
                 </header>
                 {bootstrap.attention.map((item) => (
-                  <button className={item.unread ? 'is-unread' : ''} type="button" key={item.id}>
-                    <span className="attention-icon">
-                      {item.kind === 'mention' ? (
-                        <Bell size={16} />
-                      ) : (
-                        <MessageSquareText size={16} />
+                  <div className={`attention-item ${item.unread ? 'is-unread' : ''}`} key={item.id}>
+                    <button className="attention-item-body" type="button">
+                      <span className="attention-icon">
+                        {item.kind === 'mention' ? (
+                          <Bell size={16} />
+                        ) : (
+                          <MessageSquareText size={16} />
+                        )}
+                      </span>
+                      <span>
+                        <strong>{item.title}</strong>
+                        <small>{item.detail}</small>
+                      </span>
+                    </button>
+                    <span className="attention-item-actions">
+                      {item.channelId && (
+                        <button
+                          type="button"
+                          aria-label={
+                            mutedChannelIds.has(item.channelId) ? `Unmute channel` : `Mute channel`
+                          }
+                          title={
+                            mutedChannelIds.has(item.channelId) ? 'Unmute channel' : 'Mute channel'
+                          }
+                          className={
+                            mutedChannelIds.has(item.channelId)
+                              ? 'attention-action is-muted'
+                              : 'attention-action'
+                          }
+                          onClick={() => toggleChannelMute(item.channelId!)}
+                        >
+                          <BellOff size={13} />
+                        </button>
                       )}
+                      <button
+                        type="button"
+                        aria-label="Dismiss"
+                        title="Dismiss"
+                        className="attention-action"
+                        onClick={() =>
+                          setBootstrap((current) => ({
+                            ...current,
+                            attention: dismissAttentionItem(current.attention, item.id),
+                          }))
+                        }
+                      >
+                        <X size={13} />
+                      </button>
                     </span>
-                    <span>
-                      <strong>{item.title}</strong>
-                      <small>{item.detail}</small>
-                    </span>
-                  </button>
+                  </div>
                 ))}
               </section>
               <section className="space-health">
