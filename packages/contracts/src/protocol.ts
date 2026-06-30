@@ -140,6 +140,55 @@ export const sendMessageRequestSchema = z.object({
 });
 export type SendMessageRequest = z.infer<typeof sendMessageRequestSchema>;
 
+export const editMessageRequestSchema = z.object({
+  content: z.string().trim().min(1).max(4_000),
+});
+export type EditMessageRequest = z.infer<typeof editMessageRequestSchema>;
+
+export const messageReactionRequestSchema = z.object({
+  emoji: z.string().trim().min(1).max(32),
+});
+export type MessageReactionRequest = z.infer<typeof messageReactionRequestSchema>;
+
+export const messageReactionUpdateSchema = z.object({
+  messageId: z.string().min(1),
+  emoji: z.string().min(1).max(32),
+  count: z.number().int().nonnegative(),
+  actorId: z.string().min(1),
+  reacted: z.boolean(),
+});
+export type MessageReactionUpdate = z.infer<typeof messageReactionUpdateSchema>;
+
+export const updateChannelReadStateRequestSchema = z.object({
+  lastReadMessageId: z.string().min(1),
+});
+export type UpdateChannelReadStateRequest = z.infer<typeof updateChannelReadStateRequestSchema>;
+
+export const channelReadStateSchema = z.object({
+  channelId: z.string().min(1),
+  accountId: z.string().min(1),
+  lastReadMessageId: z.string().min(1),
+  updatedAt: z.string().datetime(),
+});
+export type ChannelReadState = z.infer<typeof channelReadStateSchema>;
+
+export const auditEventSchema = z.object({
+  id: z.string().min(1),
+  communityId: z.string().min(1),
+  actorId: z.string().min(1),
+  action: z.enum([
+    'message.edited',
+    'message.deleted',
+    'message.reaction.added',
+    'message.reaction.removed',
+  ]),
+  targetType: z.literal('message'),
+  targetId: z.string().min(1),
+  metadata: z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()])),
+  createdAt: z.string().datetime(),
+});
+export type AuditEvent = z.infer<typeof auditEventSchema>;
+
 export const eventEnvelopeSchema = z.object({
   eventId: z.string().min(1),
   sequence: z.number().int().nonnegative(),

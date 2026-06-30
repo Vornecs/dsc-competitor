@@ -2,7 +2,7 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import { demoBootstrap } from '@cove/contracts';
-import { App, reconcileSavedMessage } from './App';
+import { App, reconcileMessageUpdate, reconcileReactionUpdate, reconcileSavedMessage } from './App';
 
 describe('application shell', () => {
   it('renders the four-region community experience', () => {
@@ -36,5 +36,25 @@ describe('application shell', () => {
 
     expect(reconcileSavedMessage([optimistic], optimistic.id, saved)).toEqual([saved]);
     expect(reconcileSavedMessage([optimistic, saved], optimistic.id, saved)).toEqual([saved]);
+  });
+
+  it('reconciles edited, deleted, and reaction gateway updates', () => {
+    const original = demoBootstrap.messages[0]!;
+    const edited = { ...original, content: 'Updated', editedAt: new Date().toISOString() };
+    expect(reconcileMessageUpdate([original], edited)[0]?.content).toBe('Updated');
+
+    const reacted = reconcileReactionUpdate(
+      [{ ...original, reactions: [] }],
+      { messageId: original.id, emoji: '✓', count: 1, actorId: 'account-you', reacted: true },
+      'account-you',
+    );
+    expect(reacted[0]?.reactions).toEqual([{ emoji: '✓', count: 1, reacted: true }]);
+
+    const removed = reconcileReactionUpdate(
+      reacted,
+      { messageId: original.id, emoji: '✓', count: 0, actorId: 'account-you', reacted: false },
+      'account-you',
+    );
+    expect(removed[0]?.reactions).toEqual([]);
   });
 });

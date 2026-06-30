@@ -6,7 +6,16 @@
  * the local docker-compose default.
  */
 
-import type { Account, Channel, Community, Invite, Message, Role } from '@cove/contracts';
+import type {
+  Account,
+  AuditEvent,
+  Channel,
+  ChannelReadState,
+  Community,
+  Invite,
+  Message,
+  Role,
+} from '@cove/contracts';
 import type { Pool, PoolClient, QueryResultRow } from 'pg';
 import type {
   AttachmentRecord,
@@ -91,6 +100,31 @@ interface IdempotencyRow extends QueryResultRow {
   key: string;
   message_id: string;
   data: Message;
+}
+
+interface MessageReactionRow extends QueryResultRow {
+  message_id: string;
+  account_id: string;
+  emoji: string;
+  created_at: string;
+}
+
+interface ChannelReadStateRow extends QueryResultRow {
+  channel_id: string;
+  account_id: string;
+  last_read_message_id: string;
+  updated_at: string;
+}
+
+interface AuditEventRow extends QueryResultRow {
+  id: string;
+  community_id: string;
+  actor_id: string;
+  action: AuditEvent['action'];
+  target_type: 'message';
+  target_id: string;
+  metadata: AuditEvent['metadata'];
+  created_at: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -484,12 +518,24 @@ export function createPostgresRepository(pool: Pool): Repository {
       return rows.map((r) => r.data);
     },
 
+    async getMessage(id) {
+      const row = await queryOne<MessageRow>('SELECT data FROM messages WHERE id = $1', [id]);
+      return row?.data;
+    },
+
     async addMessage(message) {
       await pool.query(
         `INSERT INTO messages (id, channel_id, data) VALUES ($1, $2, $3)
          ON CONFLICT (id) DO NOTHING`,
         [message.id, message.channelId, JSON.stringify(message)],
       );
+    },
+
+    async updateMessage(message) {
+      await pool.query('UPDATE messages SET data = $2 WHERE id = $1', [
+        message.id,
+        JSON.stringify(message),
+      ]);
     },
 
     async getIdempotentMessage(key) {
@@ -505,6 +551,109 @@ export function createPostgresRepository(pool: Pool): Repository {
          ON CONFLICT (key) DO NOTHING`,
         [key, message.id, JSON.stringify(message)],
       );
+    },
+
+    // -- Message reactions -------------------------------------------------
+
+    async getMessageReactions(messageId) {
+      const rows = await query<MessageReactionRow>(
+        `SELECT message_id, account_id, emoji, created_at
+         FROM message_reactions WHERE message_id = $1 ORDER BY created_at`,
+        [messageId],
+      );
+      return rows.map((row) => ({
+        messageId: row.message_id,
+        accountId: row.account_id,
+        emoji: row.emoji,
+        createdAt: row.created_at,
+      }));
+    },
+
+    async addMessageReaction(reaction) {
+      const result = await pool.query(
+        `INSERT INTO message_reactions (message_id, account_id, emoji, created_at)
+         VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING`,
+        [reaction.messageId, reaction.accountId, reaction.emoji, reaction.createdAt],
+      );
+      return (result.rowCount ?? 0) > 0;
+    },
+
+    async removeMessageReaction(messageId, accountId, emoji) {
+      const result = await pool.query(
+        'DELETE FROM message_reactions WHERE message_id = $1 AND account_id = $2 AND emoji = $3',
+        [messageId, accountId, emoji],
+      );
+      return (result.rowCount ?? 0) > 0;
+    },
+
+    async clearMessageReactions(messageId) {
+      await pool.query('DELETE FROM message_reactions WHERE message_id = $1', [messageId]);
+    },
+
+    // -- Channel read state ------------------------------------------------
+
+    async getChannelReadState(channelId, accountId) {
+      const row = await queryOne<ChannelReadStateRow>(
+        `SELECT channel_id, account_id, last_read_message_id, updated_at
+         FROM channel_read_states WHERE channel_id = $1 AND account_id = $2`,
+        [channelId, accountId],
+      );
+      if (!row) return undefined;
+      return {
+        channelId: row.channel_id,
+        accountId: row.account_id,
+        lastReadMessageId: row.last_read_message_id,
+        updatedAt: row.updated_at,
+      } satisfies ChannelReadState;
+    },
+
+    async setChannelReadState(state) {
+      await pool.query(
+        `INSERT INTO channel_read_states
+           (channel_id, account_id, last_read_message_id, updated_at)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (channel_id, account_id) DO UPDATE SET
+           last_read_message_id = $3, updated_at = $4`,
+        [state.channelId, state.accountId, state.lastReadMessageId, state.updatedAt],
+      );
+    },
+
+    // -- Audit events ------------------------------------------------------
+
+    async addAuditEvent(event) {
+      await pool.query(
+        `INSERT INTO audit_events
+           (id, community_id, actor_id, action, target_type, target_id, metadata, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        [
+          event.id,
+          event.communityId,
+          event.actorId,
+          event.action,
+          event.targetType,
+          event.targetId,
+          JSON.stringify(event.metadata),
+          event.createdAt,
+        ],
+      );
+    },
+
+    async getAuditEventsByCommunity(communityId) {
+      const rows = await query<AuditEventRow>(
+        `SELECT id, community_id, actor_id, action, target_type, target_id, metadata, created_at
+         FROM audit_events WHERE community_id = $1 ORDER BY created_at DESC`,
+        [communityId],
+      );
+      return rows.map((row) => ({
+        id: row.id,
+        communityId: row.community_id,
+        actorId: row.actor_id,
+        action: row.action,
+        targetType: row.target_type,
+        targetId: row.target_id,
+        metadata: row.metadata,
+        createdAt: row.created_at,
+      }));
     },
 
     // -- Attachments --------------------------------------------------------

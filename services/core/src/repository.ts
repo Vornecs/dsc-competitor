@@ -6,7 +6,16 @@
  * a PostgreSQL adapter (production) without changing application logic.
  */
 
-import type { Account, Channel, Community, Invite, Message, Role } from '@cove/contracts';
+import type {
+  Account,
+  AuditEvent,
+  Channel,
+  ChannelReadState,
+  Community,
+  Invite,
+  Message,
+  Role,
+} from '@cove/contracts';
 
 // ---------------------------------------------------------------------------
 // Domain types that are internal to the service layer
@@ -51,6 +60,13 @@ export interface EmailChallenge {
   code: string;
   challengeId: string;
   expiresAt: number;
+}
+
+export interface MessageReactionRecord {
+  messageId: string;
+  accountId: string;
+  emoji: string;
+  createdAt: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -119,9 +135,25 @@ export interface Repository {
 
   // -- Messages -------------------------------------------------------------
   getMessagesByChannel(channelId: string): Promise<Message[]>;
+  getMessage(id: string): Promise<Message | undefined>;
   addMessage(message: Message): Promise<void>;
+  updateMessage(message: Message): Promise<void>;
   getIdempotentMessage(key: string): Promise<Message | undefined>;
   setIdempotentMessage(key: string, message: Message): Promise<void>;
+
+  // -- Message reactions ---------------------------------------------------
+  getMessageReactions(messageId: string): Promise<MessageReactionRecord[]>;
+  addMessageReaction(reaction: MessageReactionRecord): Promise<boolean>;
+  removeMessageReaction(messageId: string, accountId: string, emoji: string): Promise<boolean>;
+  clearMessageReactions(messageId: string): Promise<void>;
+
+  // -- Channel read state --------------------------------------------------
+  getChannelReadState(channelId: string, accountId: string): Promise<ChannelReadState | undefined>;
+  setChannelReadState(state: ChannelReadState): Promise<void>;
+
+  // -- Audit events --------------------------------------------------------
+  addAuditEvent(event: AuditEvent): Promise<void>;
+  getAuditEventsByCommunity(communityId: string): Promise<AuditEvent[]>;
 
   // -- Attachments ----------------------------------------------------------
   getAttachment(id: string): Promise<AttachmentRecord | undefined>;

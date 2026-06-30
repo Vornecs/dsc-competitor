@@ -4,11 +4,21 @@
  * plain Maps and arrays in process memory.
  */
 
-import type { Account, Channel, Community, Invite, Message, Role } from '@cove/contracts';
+import type {
+  Account,
+  AuditEvent,
+  Channel,
+  ChannelReadState,
+  Community,
+  Invite,
+  Message,
+  Role,
+} from '@cove/contracts';
 import type {
   AttachmentRecord,
   EmailChallenge,
   Membership,
+  MessageReactionRecord,
   PasskeyCredential,
   Repository,
   SessionRecord,
@@ -28,6 +38,9 @@ export function createMemoryRepository(): Repository {
   const messages: Message[] = [];
   const idempotency = new Map<string, Message>();
   const attachments = new Map<string, AttachmentRecord>();
+  const messageReactions = new Map<string, MessageReactionRecord>();
+  const channelReadStates = new Map<string, ChannelReadState>();
+  const auditEvents: AuditEvent[] = [];
 
   return {
     // -- Accounts -----------------------------------------------------------
@@ -227,14 +240,60 @@ export function createMemoryRepository(): Repository {
     async getMessagesByChannel(channelId) {
       return messages.filter((m) => m.channelId === channelId);
     },
+    async getMessage(id) {
+      return messages.find((message) => message.id === id);
+    },
     async addMessage(message) {
       messages.push(message);
+    },
+    async updateMessage(message) {
+      const index = messages.findIndex((candidate) => candidate.id === message.id);
+      if (index >= 0) messages[index] = message;
     },
     async getIdempotentMessage(key) {
       return idempotency.get(key);
     },
     async setIdempotentMessage(key, message) {
       idempotency.set(key, message);
+    },
+
+    // -- Message reactions -------------------------------------------------
+    async getMessageReactions(messageId) {
+      return Array.from(messageReactions.values()).filter(
+        (reaction) => reaction.messageId === messageId,
+      );
+    },
+    async addMessageReaction(reaction) {
+      const key = `${reaction.messageId}:${reaction.accountId}:${reaction.emoji}`;
+      if (messageReactions.has(key)) return false;
+      messageReactions.set(key, reaction);
+      return true;
+    },
+    async removeMessageReaction(messageId, accountId, emoji) {
+      return messageReactions.delete(`${messageId}:${accountId}:${emoji}`);
+    },
+    async clearMessageReactions(messageId) {
+      for (const [key, reaction] of messageReactions) {
+        if (reaction.messageId === messageId) messageReactions.delete(key);
+      }
+    },
+
+    // -- Channel read state ------------------------------------------------
+    async getChannelReadState(channelId, accountId) {
+      return channelReadStates.get(`${channelId}:${accountId}`);
+    },
+    async setChannelReadState(state) {
+      channelReadStates.set(`${state.channelId}:${state.accountId}`, state);
+    },
+
+    // -- Audit events ------------------------------------------------------
+    async addAuditEvent(event) {
+      auditEvents.push(event);
+    },
+    async getAuditEventsByCommunity(communityId) {
+      return auditEvents
+        .filter((event) => event.communityId === communityId)
+        .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
     },
 
     // -- Attachments ----------------------------------------------------------

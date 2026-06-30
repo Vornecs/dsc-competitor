@@ -1314,3 +1314,208 @@ describe('attachment pipeline', () => {
     expect(msg.attachments[0].quarantineStatus).toBe('approved');
   });
 });
+
+describe('managed message lifecycle', () => {
+  async function authenticate(app: Awaited<ReturnType<typeof buildApp>>) {
+    const email = `lifecycle-${crypto.randomUUID()}@test.cove.chat`;
+    const send = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/email/send-code',
+      payload: { email },
+    });
+    const verify = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/email/verify',
+      payload: { email, code: '123456', challengeId: send.json().challengeId },
+    });
+    return {
+      token: verify.json().sessionToken as string,
+      account: verify.json().account as { id: string },
+    };
+  }
+
+  async function setup(app: Awaited<ReturnType<typeof buildApp>>) {
+    const owner = await authenticate(app);
+    const member = await authenticate(app);
+    const community = await app.inject({
+      method: 'POST',
+      url: '/v1/communities',
+      headers: { authorization: `Bearer ${owner.token}` },
+      payload: { name: 'Lifecycle Guild' },
+    });
+    const communityId = community.json().id as string;
+    await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/join`,
+      headers: { authorization: `Bearer ${member.token}` },
+    });
+    const channel = await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/channels`,
+      headers: { authorization: `Bearer ${owner.token}` },
+      payload: { name: 'general', kind: 'text', category: 'Chat' },
+    });
+    return { owner, member, communityId, channelId: channel.json().id as string };
+  }
+
+  async function sendMessage(
+    app: Awaited<ReturnType<typeof buildApp>>,
+    channelId: string,
+    token: string,
+    content: string,
+  ) {
+    return app.inject({
+      method: 'POST',
+      url: `/v1/channels/${channelId}/messages`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        'idempotency-key': `lifecycle-${crypto.randomUUID()}`,
+      },
+      payload: { content, clientNonce: `nonce-${crypto.randomUUID()}` },
+    });
+  }
+
+  it('allows author edits, moderator deletes, and exposes content-free audit events', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const { owner, member, communityId, channelId } = await setup(app);
+    const created = await sendMessage(app, channelId, member.token, 'Original private wording');
+    const messageId = created.json().id as string;
+
+    const forbiddenEdit = await app.inject({
+      method: 'PATCH',
+      url: `/v1/channels/${channelId}/messages/${messageId}`,
+      headers: { authorization: `Bearer ${owner.token}` },
+      payload: { content: 'Moderator rewrite' },
+    });
+    expect(forbiddenEdit.statusCode).toBe(403);
+
+    const edited = await app.inject({
+      method: 'PATCH',
+      url: `/v1/channels/${channelId}/messages/${messageId}`,
+      headers: { authorization: `Bearer ${member.token}` },
+      payload: { content: 'Revised private wording' },
+    });
+    expect(edited.statusCode).toBe(200);
+    expect(edited.json().content).toBe('Revised private wording');
+    expect(edited.json().editedAt).not.toBeNull();
+
+    const deleted = await app.inject({
+      method: 'DELETE',
+      url: `/v1/channels/${channelId}/messages/${messageId}`,
+      headers: { authorization: `Bearer ${owner.token}` },
+    });
+    expect(deleted.statusCode).toBe(200);
+    expect(deleted.json()).toMatchObject({ availability: 'deleted', content: '', attachments: [] });
+
+    const memberAudit = await app.inject({
+      method: 'GET',
+      url: `/v1/communities/${communityId}/audit-events`,
+      headers: { authorization: `Bearer ${member.token}` },
+    });
+    expect(memberAudit.statusCode).toBe(403);
+
+    const ownerAudit = await app.inject({
+      method: 'GET',
+      url: `/v1/communities/${communityId}/audit-events`,
+      headers: { authorization: `Bearer ${owner.token}` },
+    });
+    expect(ownerAudit.statusCode).toBe(200);
+    expect(ownerAudit.json().items.map((event: { action: string }) => event.action)).toEqual([
+      'message.deleted',
+      'message.edited',
+    ]);
+    expect(JSON.stringify(ownerAudit.json())).not.toContain('private wording');
+  });
+
+  it('makes reactions idempotent, permission-gated, and removable', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const { owner, member, communityId, channelId } = await setup(app);
+    const created = await sendMessage(app, channelId, owner.token, 'React here');
+    const messageId = created.json().id as string;
+    const request = {
+      method: 'PUT' as const,
+      url: `/v1/channels/${channelId}/messages/${messageId}/reactions`,
+      headers: { authorization: `Bearer ${member.token}` },
+      payload: { emoji: '✓' },
+    };
+    const added = await app.inject(request);
+    const duplicate = await app.inject(request);
+    expect(added.statusCode).toBe(200);
+    expect(added.json().reactions).toEqual([{ emoji: '✓', count: 1, reacted: true }]);
+    expect(duplicate.json().reactions).toEqual([{ emoji: '✓', count: 1, reacted: true }]);
+
+    const role = await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/roles`,
+      headers: { authorization: `Bearer ${owner.token}` },
+      payload: {
+        name: 'No reactions',
+        permissions: [{ permission: 'message.react', effect: 'deny' }],
+      },
+    });
+    await app.inject({
+      method: 'PUT',
+      url: `/v1/communities/${communityId}/members/${member.account.id}/roles/${role.json().id}`,
+      headers: { authorization: `Bearer ${owner.token}` },
+    });
+    const denied = await app.inject({ ...request, payload: { emoji: '＋1' } });
+    expect(denied.statusCode).toBe(403);
+
+    const removed = await app.inject({ ...request, method: 'DELETE' });
+    expect(removed.statusCode).toBe(200);
+    expect(removed.json().reactions).toEqual([]);
+
+    await app.inject({
+      method: 'DELETE',
+      url: `/v1/channels/${channelId}/messages/${messageId}`,
+      headers: { authorization: `Bearer ${owner.token}` },
+    });
+    const deletedReaction = await app.inject(request);
+    expect(deletedReaction.statusCode).toBe(403);
+  });
+
+  it('stores private per-account read state and rejects cross-channel cursors', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const { owner, member, communityId, channelId } = await setup(app);
+    const created = await sendMessage(app, channelId, owner.token, 'Read through here');
+    const messageId = created.json().id as string;
+
+    const updated = await app.inject({
+      method: 'PUT',
+      url: `/v1/channels/${channelId}/read-state`,
+      headers: { authorization: `Bearer ${member.token}` },
+      payload: { lastReadMessageId: messageId },
+    });
+    expect(updated.statusCode).toBe(200);
+    expect(updated.json()).toMatchObject({
+      channelId,
+      accountId: member.account.id,
+      lastReadMessageId: messageId,
+    });
+
+    const ownerState = await app.inject({
+      method: 'GET',
+      url: `/v1/channels/${channelId}/read-state`,
+      headers: { authorization: `Bearer ${owner.token}` },
+    });
+    expect(ownerState.json()).toEqual({ state: null });
+
+    const otherChannel = await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/channels`,
+      headers: { authorization: `Bearer ${owner.token}` },
+      payload: { name: 'other', kind: 'text', category: 'Chat' },
+    });
+    const otherMessage = await sendMessage(app, otherChannel.json().id, owner.token, 'Elsewhere');
+    const rejected = await app.inject({
+      method: 'PUT',
+      url: `/v1/channels/${channelId}/read-state`,
+      headers: { authorization: `Bearer ${member.token}` },
+      payload: { lastReadMessageId: otherMessage.json().id },
+    });
+    expect(rejected.statusCode).toBe(400);
+  });
+});

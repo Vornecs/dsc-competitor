@@ -6,8 +6,13 @@ import {
   bootstrapStateSchema,
   demoBootstrap,
   gatewayClientFrameSchema,
+  auditEventSchema,
+  channelReadStateSchema,
+  editMessageRequestSchema,
   messageSchema,
+  messageReactionRequestSchema,
   sendMessageRequestSchema,
+  updateChannelReadStateRequestSchema,
   initiateUploadRequestSchema,
   emailLoginRequestSchema,
   emailVerifyRequestSchema,
@@ -27,6 +32,7 @@ import {
   type Message,
   type ProblemDetail,
   type Account,
+  type AuditEvent,
   type DeviceSession,
   type Community,
   type Channel,
@@ -311,6 +317,86 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
       }
     }
     return audience;
+  }
+
+  async function materializeMessage(message: Message, viewerAccountId?: string): Promise<Message> {
+    const reactionRecords = await repo.getMessageReactions(message.id);
+    if (reactionRecords.length === 0) return message;
+
+    const grouped = new Map<string, { count: number; reacted: boolean }>();
+    for (const reaction of reactionRecords) {
+      const current = grouped.get(reaction.emoji) ?? { count: 0, reacted: false };
+      current.count += 1;
+      current.reacted ||= reaction.accountId === viewerAccountId;
+      grouped.set(reaction.emoji, current);
+    }
+    return messageSchema.parse({
+      ...message,
+      reactions: Array.from(grouped, ([emoji, state]) => ({ emoji, ...state })),
+    });
+  }
+
+  async function recordMessageAudit(
+    communityId: string,
+    actorId: string,
+    action: AuditEvent['action'],
+    messageId: string,
+    metadata: AuditEvent['metadata'],
+  ): Promise<void> {
+    const event = auditEventSchema.parse({
+      id: `audit-${crypto.randomUUID()}`,
+      communityId,
+      actorId,
+      action,
+      targetType: 'message',
+      targetId: messageId,
+      metadata,
+      createdAt: new Date().toISOString(),
+    });
+    await repo.addAuditEvent(event);
+  }
+
+  async function requireManagedChannelAccess(
+    request: any,
+    reply: FastifyReply,
+    permission: string,
+  ): Promise<{ channel: Channel; actor: Account; membership: Membership } | false> {
+    const ok = await requireAuth(request, reply);
+    if (!ok) return false;
+    const { account: actor } = request.user as { account: Account };
+    const channel = await findDynamicChannel(request.params.channelId);
+    if (!channel || channel.kind !== 'text') {
+      problem(
+        reply,
+        404,
+        'Channel not found',
+        'The requested managed text channel does not exist.',
+        request.url,
+      );
+      return false;
+    }
+    if (channel.privacy.mode !== 'managed') {
+      problem(
+        reply,
+        409,
+        'Managed channel required',
+        'This operation is only available for managed channels.',
+        request.url,
+      );
+      return false;
+    }
+    const membership = await requireMembership(reply, channel.communityId, actor.id, request.url);
+    if (!membership) return false;
+    const decision = await requirePermission(
+      reply,
+      channel.communityId,
+      membership,
+      actor.id,
+      permission,
+      request.url,
+    );
+    if (!decision) return false;
+    return { channel, actor, membership };
   }
 
   async function getMembership(
@@ -737,10 +823,12 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
         );
       }
 
+      let viewerAccountId: string | undefined;
       if (dynamicChannel) {
         const ok = await requireAuth(request, reply);
         if (!ok) return;
         const { account: authenticatedAccount } = (request as any).user;
+        viewerAccountId = authenticatedAccount.id;
         const membership = await requireMembership(
           reply,
           dynamicChannel.communityId,
@@ -759,8 +847,11 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
         if (!permission) return;
       }
 
+      const messages = await repo.getMessagesByChannel(channel.id);
       return reply.code(200).send({
-        items: await repo.getMessagesByChannel(channel.id),
+        items: await Promise.all(
+          messages.map((message) => materializeMessage(message, viewerAccountId)),
+        ),
         nextCursor: null,
       });
     },
@@ -909,6 +1000,311 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
         dynamicChannel ? await messageAudience(channel.communityId, 'message.read') : undefined,
       );
       return reply.code(201).send(message);
+    },
+  );
+
+  app.patch<{ Params: { channelId: string; messageId: string } }>(
+    '/v1/channels/:channelId/messages/:messageId',
+    async (request, reply) => {
+      const access = await requireManagedChannelAccess(request, reply, 'message.read');
+      if (!access) return;
+      const parsed = editMessageRequestSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return problem(
+          reply,
+          400,
+          'Invalid message',
+          parsed.error.issues.map((issue) => issue.message).join('; '),
+          request.url,
+        );
+      }
+      const message = await repo.getMessage(request.params.messageId);
+      if (!message || message.channelId !== access.channel.id) {
+        return problem(
+          reply,
+          404,
+          'Message not found',
+          'The requested message does not exist.',
+          request.url,
+        );
+      }
+      if (message.author.id !== access.actor.id) {
+        return problem(
+          reply,
+          403,
+          'Forbidden',
+          'Only the message author can edit message content.',
+          request.url,
+        );
+      }
+      if (message.availability !== 'plaintext') {
+        return problem(
+          reply,
+          409,
+          'Message unavailable',
+          'Deleted messages cannot be edited.',
+          request.url,
+        );
+      }
+
+      const updated = messageSchema.parse({
+        ...message,
+        content: parsed.data.content,
+        editedAt: new Date().toISOString(),
+      });
+      await repo.updateMessage(updated);
+      await recordMessageAudit(
+        access.channel.communityId,
+        access.actor.id,
+        'message.edited',
+        message.id,
+        { channelId: access.channel.id },
+      );
+      await hub.publish(
+        'message.updated',
+        await materializeMessage(updated),
+        access.channel.communityId,
+        access.actor.id,
+        await messageAudience(access.channel.communityId, 'message.read'),
+      );
+      return reply.code(200).send(await materializeMessage(updated, access.actor.id));
+    },
+  );
+
+  app.delete<{ Params: { channelId: string; messageId: string } }>(
+    '/v1/channels/:channelId/messages/:messageId',
+    async (request, reply) => {
+      const access = await requireManagedChannelAccess(request, reply, 'message.read');
+      if (!access) return;
+      const message = await repo.getMessage(request.params.messageId);
+      if (!message || message.channelId !== access.channel.id) {
+        return problem(
+          reply,
+          404,
+          'Message not found',
+          'The requested message does not exist.',
+          request.url,
+        );
+      }
+      if (message.author.id !== access.actor.id) {
+        const decision = await requirePermission(
+          reply,
+          access.channel.communityId,
+          access.membership,
+          access.actor.id,
+          'message.manage',
+          request.url,
+        );
+        if (!decision) return;
+      }
+      if (message.availability === 'deleted') {
+        return reply.code(200).send(message);
+      }
+
+      const deleted = messageSchema.parse({
+        ...message,
+        availability: 'deleted',
+        content: '',
+        reactions: [],
+        attachments: [],
+      });
+      await repo.clearMessageReactions(message.id);
+      await repo.updateMessage(deleted);
+      await recordMessageAudit(
+        access.channel.communityId,
+        access.actor.id,
+        'message.deleted',
+        message.id,
+        { channelId: access.channel.id, authorId: message.author.id },
+      );
+      await hub.publish(
+        'message.deleted',
+        deleted,
+        access.channel.communityId,
+        access.actor.id,
+        await messageAudience(access.channel.communityId, 'message.read'),
+      );
+      return reply.code(200).send(deleted);
+    },
+  );
+
+  app.put<{ Params: { channelId: string; messageId: string } }>(
+    '/v1/channels/:channelId/messages/:messageId/reactions',
+    async (request, reply) => {
+      const access = await requireManagedChannelAccess(request, reply, 'message.react');
+      if (!access) return;
+      const parsed = messageReactionRequestSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return problem(
+          reply,
+          400,
+          'Invalid reaction',
+          parsed.error.issues.map((issue) => issue.message).join('; '),
+          request.url,
+        );
+      }
+      const message = await repo.getMessage(request.params.messageId);
+      if (!message || message.channelId !== access.channel.id) {
+        return problem(
+          reply,
+          404,
+          'Message not found',
+          'The requested message does not exist.',
+          request.url,
+        );
+      }
+      if (message.availability !== 'plaintext') {
+        return problem(
+          reply,
+          409,
+          'Message unavailable',
+          'Deleted messages cannot be reacted to.',
+          request.url,
+        );
+      }
+      const added = await repo.addMessageReaction({
+        messageId: message.id,
+        accountId: access.actor.id,
+        emoji: parsed.data.emoji,
+        createdAt: new Date().toISOString(),
+      });
+      const materialized = await materializeMessage(message, access.actor.id);
+      if (added) {
+        const reaction = materialized.reactions.find((item) => item.emoji === parsed.data.emoji);
+        await recordMessageAudit(
+          access.channel.communityId,
+          access.actor.id,
+          'message.reaction.added',
+          message.id,
+          { channelId: access.channel.id, emoji: parsed.data.emoji },
+        );
+        await hub.publish(
+          'message.reaction.updated',
+          {
+            messageId: message.id,
+            emoji: parsed.data.emoji,
+            count: reaction?.count ?? 0,
+            actorId: access.actor.id,
+            reacted: true,
+          },
+          access.channel.communityId,
+          access.actor.id,
+          await messageAudience(access.channel.communityId, 'message.read'),
+        );
+      }
+      return reply.code(200).send(materialized);
+    },
+  );
+
+  app.delete<{ Params: { channelId: string; messageId: string } }>(
+    '/v1/channels/:channelId/messages/:messageId/reactions',
+    async (request, reply) => {
+      // Removing one's own reaction remains available after message.react is revoked.
+      const access = await requireManagedChannelAccess(request, reply, 'message.read');
+      if (!access) return;
+      const parsed = messageReactionRequestSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return problem(
+          reply,
+          400,
+          'Invalid reaction',
+          parsed.error.issues.map((issue) => issue.message).join('; '),
+          request.url,
+        );
+      }
+      const message = await repo.getMessage(request.params.messageId);
+      if (!message || message.channelId !== access.channel.id) {
+        return problem(
+          reply,
+          404,
+          'Message not found',
+          'The requested message does not exist.',
+          request.url,
+        );
+      }
+      const removed = await repo.removeMessageReaction(
+        message.id,
+        access.actor.id,
+        parsed.data.emoji,
+      );
+      const materialized = await materializeMessage(message, access.actor.id);
+      if (removed) {
+        const reaction = materialized.reactions.find((item) => item.emoji === parsed.data.emoji);
+        await recordMessageAudit(
+          access.channel.communityId,
+          access.actor.id,
+          'message.reaction.removed',
+          message.id,
+          { channelId: access.channel.id, emoji: parsed.data.emoji },
+        );
+        await hub.publish(
+          'message.reaction.updated',
+          {
+            messageId: message.id,
+            emoji: parsed.data.emoji,
+            count: reaction?.count ?? 0,
+            actorId: access.actor.id,
+            reacted: false,
+          },
+          access.channel.communityId,
+          access.actor.id,
+          await messageAudience(access.channel.communityId, 'message.read'),
+        );
+      }
+      return reply.code(200).send(materialized);
+    },
+  );
+
+  app.get<{ Params: { channelId: string } }>(
+    '/v1/channels/:channelId/read-state',
+    async (request, reply) => {
+      const access = await requireManagedChannelAccess(request, reply, 'message.read');
+      if (!access) return;
+      const state = await repo.getChannelReadState(access.channel.id, access.actor.id);
+      return reply.code(200).send({ state: state ?? null });
+    },
+  );
+
+  app.put<{ Params: { channelId: string } }>(
+    '/v1/channels/:channelId/read-state',
+    async (request, reply) => {
+      const access = await requireManagedChannelAccess(request, reply, 'message.read');
+      if (!access) return;
+      const parsed = updateChannelReadStateRequestSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return problem(
+          reply,
+          400,
+          'Invalid read state',
+          parsed.error.issues.map((issue) => issue.message).join('; '),
+          request.url,
+        );
+      }
+      const message = await repo.getMessage(parsed.data.lastReadMessageId);
+      if (!message || message.channelId !== access.channel.id) {
+        return problem(
+          reply,
+          400,
+          'Invalid read state',
+          'The last-read message must belong to the target channel.',
+          request.url,
+        );
+      }
+      const state = channelReadStateSchema.parse({
+        channelId: access.channel.id,
+        accountId: access.actor.id,
+        lastReadMessageId: message.id,
+        updatedAt: new Date().toISOString(),
+      });
+      await repo.setChannelReadState(state);
+      await hub.publish(
+        'channel.read-state.updated',
+        state,
+        access.channel.communityId,
+        access.actor.id,
+        new Set([access.actor.id]),
+      );
+      return reply.code(200).send(state);
     },
   );
 
@@ -1197,6 +1593,38 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
       const membership = await requireMembership(reply, community.id, account.id, request.url);
       if (!membership) return;
       return reply.code(200).send(community);
+    },
+  );
+
+  app.get<{ Params: { communityId: string } }>(
+    '/v1/communities/:communityId/audit-events',
+    async (request, reply) => {
+      const ok = await requireAuth(request, reply);
+      if (!ok) return;
+      const { account: actor } = (request as any).user as { account: Account };
+      const community = await repo.getCommunity(request.params.communityId);
+      if (!community) {
+        return problem(
+          reply,
+          404,
+          'Community not found',
+          'The requested community does not exist.',
+          request.url,
+        );
+      }
+      const membership = await requireMembership(reply, community.id, actor.id, request.url);
+      if (!membership) return;
+      const decision = await requirePermission(
+        reply,
+        community.id,
+        membership,
+        actor.id,
+        'audit.read',
+        request.url,
+      );
+      if (!decision) return;
+      const events = await repo.getAuditEventsByCommunity(community.id);
+      return reply.code(200).send({ items: events.slice(0, 100), nextCursor: null });
     },
   );
 

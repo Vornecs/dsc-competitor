@@ -2,6 +2,7 @@ import {
   bootstrapStateSchema,
   demoBootstrap,
   gatewayServerFrameSchema,
+  messageReactionUpdateSchema,
   messageSchema,
   type BootstrapState,
   type Channel,
@@ -48,6 +49,30 @@ export function reconcileSavedMessage(current: Message[], optimisticId: string, 
   return withoutOptimistic.some((item) => item.id === saved.id)
     ? withoutOptimistic
     : [...withoutOptimistic, saved];
+}
+
+export function reconcileMessageUpdate(current: Message[], updated: Message): Message[] {
+  return current.map((message) => (message.id === updated.id ? updated : message));
+}
+
+export function reconcileReactionUpdate(
+  current: Message[],
+  update: ReturnType<typeof messageReactionUpdateSchema.parse>,
+  accountId: string,
+): Message[] {
+  return current.map((message) => {
+    if (message.id !== update.messageId) return message;
+    const existing = message.reactions.find((reaction) => reaction.emoji === update.emoji);
+    const reactions = message.reactions.filter((reaction) => reaction.emoji !== update.emoji);
+    if (update.count > 0) {
+      reactions.push({
+        emoji: update.emoji,
+        count: update.count,
+        reacted: update.actorId === accountId ? update.reacted : (existing?.reacted ?? false),
+      });
+    }
+    return { ...message, reactions };
+  });
 }
 
 function PrivacyNotice({ channel }: { channel: Channel }) {
@@ -149,6 +174,23 @@ export function App() {
         setMessages((current) =>
           current.some((item) => item.id === message.id) ? current : [...current, message],
         );
+      }
+      if (
+        frame.op === 'EVENT' &&
+        (frame.data.type === 'message.updated' || frame.data.type === 'message.deleted')
+      ) {
+        const message = messageSchema.safeParse(frame.data.data);
+        if (message.success) {
+          setMessages((current) => reconcileMessageUpdate(current, message.data));
+        }
+      }
+      if (frame.op === 'EVENT' && frame.data.type === 'message.reaction.updated') {
+        const update = messageReactionUpdateSchema.safeParse(frame.data.data);
+        if (update.success) {
+          setMessages((current) =>
+            reconcileReactionUpdate(current, update.data, bootstrap.account.id),
+          );
+        }
       }
     });
     socket.addEventListener('close', () => setConnection('preview'));
@@ -412,7 +454,9 @@ export function App() {
                           <time>{timeLabel(message.createdAt)}</time>
                         </header>
                       )}
-                      <p>{message.content}</p>
+                      <p>
+                        {message.availability === 'deleted' ? 'Message deleted' : message.content}
+                      </p>
                       {message.reactions.length > 0 && (
                         <div className="reactions">
                           {message.reactions.map((reaction) => (

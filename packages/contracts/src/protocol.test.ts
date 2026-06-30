@@ -4,8 +4,12 @@ import {
   channelSchema,
   createInviteRequestSchema,
   createRoleRequestSchema,
+  auditEventSchema,
+  channelReadStateSchema,
   demoBootstrap,
+  editMessageRequestSchema,
   gatewayServerFrameSchema,
+  messageReactionRequestSchema,
   resolvePermission,
   stageConfigSchema,
 } from './index.js';
@@ -91,6 +95,35 @@ describe('role and invite contracts', () => {
     expect(createInviteRequestSchema.safeParse({ expiresInSeconds: 300 }).success).toBe(true);
     expect(createInviteRequestSchema.safeParse({ expiresInSeconds: 30 }).success).toBe(false);
     expect(createInviteRequestSchema.safeParse({ maxUses: 1_001 }).success).toBe(false);
+  });
+});
+
+describe('managed message lifecycle contracts', () => {
+  it('validates edits, reactions, read states, and metadata-only audit events', () => {
+    expect(editMessageRequestSchema.safeParse({ content: ' revised ' }).success).toBe(true);
+    expect(editMessageRequestSchema.safeParse({ content: '   ' }).success).toBe(false);
+    expect(messageReactionRequestSchema.safeParse({ emoji: '✓' }).success).toBe(true);
+    expect(messageReactionRequestSchema.safeParse({ emoji: '' }).success).toBe(false);
+    expect(
+      channelReadStateSchema.safeParse({
+        channelId: 'channel-1',
+        accountId: 'account-1',
+        lastReadMessageId: 'message-1',
+        updatedAt: new Date().toISOString(),
+      }).success,
+    ).toBe(true);
+    expect(
+      auditEventSchema.safeParse({
+        id: 'audit-1',
+        communityId: 'community-1',
+        actorId: 'account-1',
+        action: 'message.deleted',
+        targetType: 'message',
+        targetId: 'message-1',
+        metadata: { channelId: 'channel-1' },
+        createdAt: new Date().toISOString(),
+      }).success,
+    ).toBe(true);
   });
 });
 
