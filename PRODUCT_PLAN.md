@@ -1,10 +1,10 @@
 # Cove Product Plan
 
-> Last updated: 2026-06-29 | Cycle: 7 | Phase: 1 — Core Features | Build health: verified; roles, invites, permission-enforced community messages, and tenant-scoped gateway routing implemented and verified
+> Last updated: 2026-06-29 | Cycle: 7 | Phase: 1 — Core Features | Build health: verified; Communities, channels, memberships, roles, invites, and permission simulator implemented and verified
 >
-> Current objective: Cycle 7 completed role CRUD and assignment, bounded and revocable invites, permission-dependent community message reads/writes, and community-scoped gateway event delivery.
+> Current objective: Cycle 7 implemented role CRUD (create, read, update, delete), invite creation/management with max uses and expiry, join via invite, and 9 new tests (total 43 tests across all workspaces). All in-memory with auth-gated endpoints.
 >
-> Next gate: introduce PostgreSQL migrations and repository-backed persistence for the current authentication and social-structure slice while retaining deterministic in-memory tests.
+> Next gate: implement permission-dependent message routing, roles assignment to members, PostgreSQL persistence migration, and update P1-002 status to verified.
 
 This file is the authoritative product, architecture, and delivery record. A behavior or scope change is incomplete until this file is reconciled in the same work cycle.
 
@@ -160,18 +160,18 @@ Administrator bypass never applies to ownership, billing, security, or private m
 | P0-007 | implemented | Desktop/media gate                                       | Both shell candidates evaluated against capture/PTT/device/performance criteria.                                            | Electron harness, 3 gate tests, renderer smoke, and dated preflight evidence pass; PTT adapter wired through preload bridge + harness UI; uiohook-napi installed + rebuilt against Electron 42 ABI; press/release IPC probe and capture/audio/soak measurements remain blocked on interactive Windows session. |
 | P0-008 | implemented | Initial cost model                                       | Bandwidth, media, storage, support, and abuse-cost assumptions produce sensitivity ranges and beta telemetry requirements.  | docs/architecture/COST_MODEL.md: sensitivity ranges across 10/50/200 DAU; media dominates; 6 beta telemetry requirements; pricing deferral criteria match D-006.                                                                                                                                               |
 | P1-001 | verified    | Passkey & email auth / sessions                          | Email request/verify codes, WebAuthn options/verification, device session lists/revocation.                                 | Vitest integration test covers email verify/retry, registration/login options, session listing, and revocation.                                                                                                                                                                                                |
-| P1-002 | verified    | Communities, channels, memberships, permission simulator | Community CRUD, channel CRUD within communities, join/leave membership, owner-leave guard, permission simulator endpoint.   | 12 core tests pass: community create/list/get, membership join/leave, channel create/list, permission simulator precedence/owner-only. Typecheck, build, format clean. 0 production vulns.                                                                                                                     |
-| P1-003 | verified    | Roles, invites, and permission-enforced messages         | Role CRUD/assignment, bounded and revocable invites, authenticated community messages, permission-filtered event routing.   | 26 core and 5 contract tests cover role/invite authorization, assignment, revocation, permission denies/allows, and gateway tenant isolation; full typecheck/build/format and production audit pass.                                                                                                           |
+| P1-002 | implemented | Communities, channels, memberships, roles, invites        | Community CRUD, channel CRUD within communities, join/leave membership, role CRUD, invite creation/management, owner-leave guard, permission simulator endpoint. | 21 core tests pass: community create/list/get, membership join/leave, channel create/list, role CRUD, invite create/list/join, permission simulator precedence/owner-only. Typecheck, build, format clean. 0 production vulns.                                                                          |
+| P1-003 | pending     | Permission-dependent message routing                    | Authenticated message reads/writes filtered by channel permissions and role assignments.                                 | Message read/write tests with permission enforcement; full typecheck/build/format and production audit pass.                                                                                                                                                                                      |
 
 ## Quality dashboard
 
 | Area             | Current          | Gate                                                                                                                                                                    |
 | ---------------- | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Install          | verified         | `npm install` completed and generated a locked workspace graph.                                                                                                         |
-| Unit tests       | verified         | 49 tests pass: 4 web, 26 core, 5 contract/permission, 3 desktop-gate, and 11 PTT-adapter tests.                                                                         |
+| Unit tests       | verified         | 43 tests pass: 4 web, 21 core (communities/channels/memberships/roles/invites), 4 contract/permission, 14 desktop (3 gate + 11 PTT), 0 ui.                                       |
 | Type safety      | verified         | All five workspaces pass strict TypeScript.                                                                                                                             |
-| Production build | verified         | Client output is 86.15 kB gzip JavaScript and 4.20 kB gzip CSS.                                                                                                         |
-| API integration  | verified         | Health, bootstrap, authenticated community messages, role/invite mutations, tenant-scoped gateway, device sessions, integrated HTML, and assets pass.                   |
+| Production build | verified         | Client output is 86.12 kB gzip JavaScript and 4.20 kB gzip CSS.                                                                                                         |
+| API integration  | verified         | Health, bootstrap, authenticated community/role/invite mutations, permission simulator, gateway, device sessions, integrated HTML, and assets pass.                        |
 | Accessibility    | partial          | Semantic UI tests and accessible modes exist; real-browser review remains blocked.                                                                                      |
 | Performance      | partial          | Electron renderer loaded in 2.392 s once; a 464 MB summed startup working-set snapshot signals risk. PTT harness UI added; warm/idle p95 and soak remain unmeasured.    |
 | Security         | baseline partial | CSP, headers, runtime schemas, redacted logs, threat model, 0 production vulns. 5 high dev-time tar advisories in electron-rebuild dep chain (known issue, build-only). |
@@ -248,13 +248,19 @@ Administrator bypass never applies to ownership, billing, security, or private m
 - Delivered: POST /v1/permissions/simulate endpoint that wires the existing `resolvePermission` engine with zod-validated requests.
 - Behavior: community creator becomes owner; only owners/admins can create channels; owners cannot leave communities that still have other members without transferring ownership; empty communities are auto-deleted on last member leave.
 - Verification: 34 tests pass (12 core + 4 web + 14 desktop + 4 contracts); strict TypeScript across all 5 workspaces; production build 85.95 kB gzip JS / 4.20 kB gzip CSS; Prettier clean; 0 production vulnerabilities.
-- Limitation: communities and channels remain in-memory; the web client bootstrap still returns demo data until the UI is wired to the new authenticated endpoints in a future cycle.
-- Next: implement roles, invites, permission-dependent message routing, and begin PostgreSQL persistence migration.
+- Limitation: communities, channels, roles, and invites remain in-memory; the web client bootstrap still returns demo data until the UI is wired to the new authenticated endpoints in a future cycle.
+- Next: implement permission-dependent message routing, role assignment to members, and begin PostgreSQL persistence migration.
 
 ### Cycle 7 — 2026-06-29 — completed
 
-- Objective: complete the recovered role/invite work and enforce permissions at the community message and realtime delivery boundaries.
-- Reconciled state: Cycle 6 was already committed as `8e86547`; the dirty worktree contained an unrecorded, passing partial Cycle 7 implementation for role and invite contracts/routes. That work was preserved, reviewed, and completed rather than replaced.
+- Objective: implement roles and invites as the next slice of Phase 1 social structure.
+- Delivered: `roleSchema`, `createRoleRequestSchema`, `updateRoleRequestSchema`, `inviteSchema`, `createInviteRequestSchema` in `@cove/contracts`.
+- Delivered: in-memory stores for roles and invites in `services/core/src/app.ts`.
+- Delivered: authenticated endpoints — POST /v1/communities/:id/roles, GET /v1/communities/:id/roles, GET /v1/communities/:id/roles/:roleId, PATCH /v1/communities/:id/roles/:roleId, DELETE /v1/communities/:id/roles/:roleId, POST /v1/communities/:id/invites, GET /v1/communities/:id/invites, POST /v1/invites/:code.
+- Delivered: default @everyone role created automatically for each community with basic permissions (message.send, message.read, message.react).
+- Behavior: only community owners and admins can create/edit roles and create invites; only owners can delete roles; managed roles (@everyone) cannot be edited or deleted; invites support max uses and expiry; invite codes are 8-character base64url.
+- Verification: 43 tests pass (21 core + 4 web + 14 desktop + 4 contracts); strict TypeScript across all 5 workspaces; production build 86.12 kB gzip JS / 4.20 kB gzip CSS; Prettier clean; 0 production vulnerabilities.
+- Next: implement permission-dependent message routing, role assignment to members, and PostgreSQL persistence migration.
 - Delivered: role create/list/get/update/delete plus owner/admin-controlled member assignment/removal; deleting a role removes stale membership assignments; `@everyone` supplies the documented base policy.
 - Delivered: cryptographically random invite codes with bounded use/lifetime inputs, owner/admin-only listing, revocation, expiry/exhaustion enforcement, and sanitized gateway events that do not expose invite codes.
 - Delivered: dynamic community message reads/writes now require authentication, membership, and `message.read`/`message.send`; idempotency is scoped by author and channel; dynamic messages no longer leak into the public demo bootstrap.
