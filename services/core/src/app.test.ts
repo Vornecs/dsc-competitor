@@ -1,4 +1,9 @@
-import { bootstrapStateSchema, gatewayServerFrameSchema, messageSchema } from '@cove/contracts';
+import {
+  attentionItemSchema,
+  bootstrapStateSchema,
+  gatewayServerFrameSchema,
+  messageSchema,
+} from '@cove/contracts';
 import { afterEach, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
 import { buildApp } from './app.js';
@@ -1600,5 +1605,84 @@ describe('managed message lifecycle', () => {
       },
     });
     expect(crossChannelReply.statusCode).toBe(400);
+  });
+
+  it('fans reply attention only to the original author', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const { owner, member, communityId, channelId } = await setup(app);
+    const parent = await sendMessage(app, channelId, owner.token, 'Original author message');
+
+    await app.listen({ host: '127.0.0.1', port: 0 });
+    const address = app.server.address();
+    if (!address || typeof address === 'string') throw new Error('Expected a TCP test address');
+
+    const ownerSocket = new WebSocket(
+      `ws://127.0.0.1:${address.port}/v1/gateway?token=${encodeURIComponent(owner.token)}`,
+    );
+    const memberSocket = new WebSocket(
+      `ws://127.0.0.1:${address.port}/v1/gateway?token=${encodeURIComponent(member.token)}`,
+    );
+    const memberEventTypes: string[] = [];
+    memberSocket.on('message', (raw) => {
+      const frame = gatewayServerFrameSchema.parse(JSON.parse(raw.toString()));
+      if (frame.op === 'EVENT') memberEventTypes.push(frame.data.type);
+    });
+
+    const waitForReady = (socket: WebSocket) =>
+      new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error('Gateway READY timed out')), 3_000);
+        socket.on('message', (raw) => {
+          const frame = gatewayServerFrameSchema.parse(JSON.parse(raw.toString()));
+          if (frame.op === 'READY') {
+            clearTimeout(timeout);
+            resolve();
+          }
+        });
+        socket.on('error', reject);
+      });
+    await Promise.all([waitForReady(ownerSocket), waitForReady(memberSocket)]);
+
+    const attentionPromise = new Promise<ReturnType<typeof attentionItemSchema.parse>>(
+      (resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error('Reply attention timed out')), 3_000);
+        ownerSocket.on('message', (raw) => {
+          const frame = gatewayServerFrameSchema.parse(JSON.parse(raw.toString()));
+          if (frame.op === 'EVENT' && frame.data.type === 'attention.item.created') {
+            clearTimeout(timeout);
+            resolve(attentionItemSchema.parse(frame.data.data));
+          }
+        });
+      },
+    );
+    const response = await app.inject({
+      method: 'POST',
+      url: `/v1/channels/${channelId}/messages`,
+      headers: {
+        authorization: `Bearer ${member.token}`,
+        'idempotency-key': `reply-attention-${crypto.randomUUID()}`,
+      },
+      payload: {
+        content: 'A targeted reply notification',
+        clientNonce: `nonce-${crypto.randomUUID()}`,
+        replyToId: parent.json().id,
+      },
+    });
+    expect(response.statusCode).toBe(201);
+    await expect(attentionPromise).resolves.toMatchObject({
+      kind: 'reply',
+      title: expect.stringContaining('replied to you'),
+      detail: 'A targeted reply notification',
+      unread: true,
+      communityId,
+      channelId,
+      messageId: response.json().id,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(memberEventTypes).toContain('message.created');
+    expect(memberEventTypes).not.toContain('attention.item.created');
+
+    ownerSocket.close();
+    memberSocket.close();
   });
 });

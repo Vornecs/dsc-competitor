@@ -1,10 +1,10 @@
 # Cove Product Plan
 
-> Last updated: 2026-06-29 | Cycle: 13 | Phase: 1 — Core Features | Build health: verified; ordered migration runner and same-channel replies live
+> Last updated: 2026-06-29 | Cycle: 14 | Phase: 1 — Core Features | Build health: verified; account-targeted reply attention live
 >
-> Current objective: Cycle 13 delivered an ordered, idempotent PostgreSQL migration runner with a `schema_migrations` ledger table, `004_replies.sql` for the reply FK column, `replyToId` and `replyPreview` on the message contract, same-channel reply enforcement in the send route, and 5 migration runner unit tests.
+> Current objective: Cycle 14 delivered account-targeted `attention.item.created` gateway events for replies, permission-safe recipient filtering, navigable attention metadata, and idempotent web attention-center reconciliation.
 >
-> Next gate: attention-center items for reply notifications (attentionItemSchema kind: 'reply'), followed by community member presence (online/idle/DnD broadcast on gateway connect/disconnect).
+> Next gate: community member presence (online/idle/do-not-disturb/offline contracts and gateway connect/disconnect fanout), followed by presence reconciliation in the web participant surfaces.
 
 This file is the authoritative product, architecture, and delivery record. A behavior or scope change is incomplete until this file is reconciled in the same work cycle.
 
@@ -79,6 +79,7 @@ Original research remains required: at least 12 members, 8 hosts/moderators, and
 | D-010 | Keep the desktop-shell selection open and implement Electron as the first control candidate.                                   | Electron has first-party Windows capture/loopback APIs and runs with the installed toolchain; Tauri requires missing Rust/Visual Studio prerequisites and still needs a capture adapter. | Tauri completes the same measurements or Electron cannot meet PTT/performance budgets after a native adapter spike.                     |
 | D-011 | Treat the managed `@everyone` role as the community base policy and assigned roles as role-level permission rules.             | This maps stored roles directly onto the documented precedence engine, makes deny behavior explainable, and avoids implicitly assigning a mutable role ID to every membership.           | Channel overrides or role hierarchy require a richer policy model that cannot preserve the documented precedence.                       |
 | D-012 | Keep read state private to its account; soft-delete message content; store only non-content mutation metadata in audit events. | Read activity should not become moderator surveillance, while deletion accountability must not create a second archive of message content.                                               | A reviewed moderation/evidence design requires narrowly scoped content retention with explicit user-visible policy and access controls. |
+| D-013 | Route reply attention only to the original author when they still have `message.read`; suppress self-reply attention.          | Reply notifications must not disclose channel activity after access is lost or create self-generated noise. Notification previews are bounded by the public attention contract.          | User research supports broader thread-following semantics with explicit notification controls and equivalent permission filtering.      |
 
 ## Architecture and public contracts
 
@@ -131,11 +132,12 @@ Administrator bypass never applies to ownership, billing, security, or private m
 - Accounts, communities, memberships, roles, channels, invites, and permission simulator.
 - PostgreSQL persistence, migrations, Redis coordination, and object-storage quarantine.
 - Managed messages, replies, reactions, edits, deletes, read state, and attachment pipeline.
+- Account-targeted reply attention and community member presence.
 - Audit events, backups, restore drill, deployable web client, and operator diagnostics.
 
 ### Later
 
-- Phase 2: voice, screen share, stage channels (broadcast with listen-only subchannels, hover-to-eavesdrop, and keybind-gated stage audio), Windows packaging, attention center, presence, and E2EE DMs.
+- Phase 2: voice, screen share, stage channels (broadcast with listen-only subchannels, hover-to-eavesdrop, and keybind-gated stage audio), Windows packaging, expanded attention controls, and E2EE DMs.
 - Phase 3: private alpha moderation with guided report flow and unintimidating report area, exports, deletion, migration bridge, sealed channels, and billing sandbox.
 - Phase 4: external beta hardening, load, legal review, independent security/E2EE review, and gradual cohorts.
 - Phase 5: native mobile, other desktop platforms, supported self-hosting, apps, curated discovery, and knowledge channels.
@@ -167,22 +169,23 @@ Administrator bypass never applies to ownership, billing, security, or private m
 | P1-004 | implemented | PostgreSQL persistence                             | Initial PostgreSQL schema (10 tables), pg-based repository adapter, DATABASE_URL-driven repository selection, docker-compose for local dev.                                                                                                                       | 54 tests pass (10 contracts + 14 desktop + 4 web + 26 core); typecheck, build (86.41 kB gzip), and format clean. Repository interface is fully async; memory adapter remains default for tests; postgres adapter activated via DATABASE_URL env.                                                               |
 | P1-005 | verified    | Attachment pipeline                                | Two-phase upload (initiate metadata → PUT raw body), per-MIME allowlist (images, video/mp4/webm, audio, pdf, zip, text), 25 MB cap, quarantine status (auto-approve in dev), binary serve endpoint, message `attachmentIds` resolution, PostgreSQL migration 002. | 64 tests pass (36 core + 10 contracts + 4 web + 14 desktop); strict typecheck, build 86.49 kB gzip, format clean, 0 production vulns. 5 new attachment tests covering initiate/upload/serve/duplicate/message-resolution.                                                                                      |
 | P1-006 | verified    | Managed message lifecycle and audit trail          | Author-only edits; author or `message.manage` soft-deletes; idempotent permission-gated reactions; private per-account read state; metadata-only audit events; gateway/client reconciliation; PostgreSQL migration 003.                                           | 69 tests pass (39 core + 11 contracts + 5 web + 14 desktop); strict typecheck; production build 87.55 kB gzip JS / 4.20 kB gzip CSS; format clean; production and full audits report 0 vulnerabilities.                                                                                                        |
-| P1-007 | verified    | Ordered migration runner and same-channel replies  | `runMigrations(pool)` creates `schema_migrations` ledger, runs pending `.sql` files in filename order inside transactions, rolls back on failure; `004_replies.sql` adds `reply_to_id` FK; `replyToId` + `replyPreview` on message contract and send route.      | 75 tests pass (45 core + 11 contracts + 5 web + 14 desktop); strict typecheck; production build 87.60 kB gzip JS / 4.20 kB gzip CSS; format clean; 0 production vulnerabilities.                                                                                                                               |
+| P1-007 | verified    | Ordered migration runner and same-channel replies  | `runMigrations(pool)` creates `schema_migrations` ledger, runs pending `.sql` files in filename order inside transactions, rolls back on failure; `004_replies.sql` adds `reply_to_id` FK; `replyToId` + `replyPreview` on message contract and send route.       | 75 tests pass (45 core + 11 contracts + 5 web + 14 desktop); strict typecheck; production build 87.60 kB gzip JS / 4.20 kB gzip CSS; format clean; 0 production vulnerabilities.                                                                                                                               |
+| P1-008 | verified    | Account-targeted reply attention                   | Replies emit a navigable `attention.item.created` event only to the original author when they retain channel read access; self-replies do not notify; the web client deduplicates replayed attention items.                                                       | 78 tests pass (46 core + 12 contracts + 6 web + 14 desktop); strict typecheck; production build 87.66 kB gzip JS / 4.20 kB gzip CSS; changed-scope format clean; production and full audits report 0 vulnerabilities.                                                                                          |
 
 ## Quality dashboard
 
-| Area             | Current          | Gate                                                                                                                                                                             |
-| ---------------- | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Install          | verified         | `npm install` completed and generated a locked workspace graph.                                                                                                                  |
-| Unit tests       | verified         | 75 tests pass: 5 web, 45 core (5 migration runner + 1 reply), 11 contracts, 14 desktop (3 gate + 11 PTT), 0 ui.                                                                   |
-| Type safety      | verified         | All five workspaces pass strict TypeScript.                                                                                                                                      |
-| Production build | verified         | Client output is 87.60 kB gzip JavaScript and 4.20 kB gzip CSS.                                                                                                                  |
-| API integration  | verified         | Health, bootstrap, authenticated community/role/invite/message lifecycle mutations, audit reads, private read state, same-channel replies, gateway, device sessions, integrated HTML, and assets pass. |
-| Accessibility    | partial          | Semantic UI tests and accessible modes exist; real-browser review remains blocked.                                                                                               |
-| Performance      | partial          | Electron renderer loaded in 2.392 s once; a 464 MB summed startup working-set snapshot signals risk. PTT harness UI added; warm/idle p95 and soak remain unmeasured.             |
-| Security         | baseline partial | CSP, headers, runtime schemas, redacted logs, metadata-only message audit events, threat model, and 0 vulnerabilities in both production and full dependency audits.             |
-| Reliability      | local only       | Backup/restore and deployment SLOs begin in Phase 1.                                                                                                                             |
-| Cost             | modelled         | Initial cost model (P0-008) exists; real-world telemetry pending managed-service activation.                                                                                     |
+| Area             | Current          | Gate                                                                                                                                                                                                                             |
+| ---------------- | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Install          | verified         | `npm install` completed and generated a locked workspace graph.                                                                                                                                                                  |
+| Unit tests       | verified         | 78 tests pass: 6 web, 46 core (including migration, reply, and targeted gateway attention), 12 contracts, 14 desktop (3 gate + 11 PTT), 0 ui.                                                                                    |
+| Type safety      | verified         | All five workspaces pass strict TypeScript.                                                                                                                                                                                      |
+| Production build | verified         | Client output is 87.66 kB gzip JavaScript and 4.20 kB gzip CSS.                                                                                                                                                                  |
+| API integration  | verified         | Health, bootstrap, authenticated community/role/invite/message lifecycle mutations, audit reads, private read state, same-channel replies, targeted reply attention, gateway, device sessions, integrated HTML, and assets pass. |
+| Accessibility    | partial          | Semantic UI tests and accessible modes exist; real-browser review remains blocked.                                                                                                                                               |
+| Performance      | partial          | Electron renderer loaded in 2.392 s once; a 464 MB summed startup working-set snapshot signals risk. PTT harness UI added; warm/idle p95 and soak remain unmeasured.                                                             |
+| Security         | baseline partial | CSP, headers, runtime schemas, redacted logs, metadata-only message audit events, threat model, and 0 vulnerabilities in both production and full dependency audits.                                                             |
+| Reliability      | local only       | Backup/restore and deployment SLOs begin in Phase 1.                                                                                                                                                                             |
+| Cost             | modelled         | Initial cost model (P0-008) exists; real-world telemetry pending managed-service activation.                                                                                                                                     |
 
 ## Risk register
 
@@ -198,6 +201,18 @@ Administrator bypass never applies to ownership, billing, security, or private m
 | UI becomes unstable or decorative               | Medium      | High     | Semantic design system, visual regression, density modes, measured navigation-change policy.                                                                                                    |
 
 ## Recent session checkpoints
+
+### Cycle 14 — 2026-06-29 — completed
+
+- Objective: deliver attention-center notifications for replies without widening channel visibility or notifying the replying account.
+- Delivered: optional `communityId`, `channelId`, and `messageId` navigation metadata on `attentionItemSchema`; reply sends now emit `attention.item.created` with a contract-bounded preview.
+- Delivery policy: the original message author is the sole audience, self-replies are suppressed, and the existing `message.read` audience is reused so revoked or denied members receive no attention event.
+- Delivered: the web gateway handler validates reply attention and reconciles it to the front of the attention center without duplicating replayed events.
+- Decision: D-013 records account targeting, current read-permission filtering, and self-reply suppression.
+- Verification: 78 tests pass (46 core + 12 contracts + 6 web + 14 desktop); all five workspaces pass strict TypeScript; production build succeeds at 87.66 kB gzip JavaScript and 4.20 kB gzip CSS; changed-scope Prettier passes; production and full dependency audits report 0 vulnerabilities.
+- Formatting limitation: root Prettier still flags the pre-existing user-local `.claude/settings.local.json`; it was intentionally left unchanged because it is outside this cycle's scope.
+- External blockers unchanged: participant research, LiveKit credentials, interactive Windows media/PTT measurements, Tauri toolchain approval, code signing, browser-policy QA, and external legal/security review. Docker remains unavailable for live PostgreSQL migration execution.
+- Exact next task: add community member presence contracts and gateway fanout for authenticated connect/disconnect, with multi-session-safe offline transitions; then reconcile presence in web participant surfaces.
 
 ### Cycle 1 — 2026-06-29 — completed
 

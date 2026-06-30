@@ -2,7 +2,13 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import { demoBootstrap } from '@cove/contracts';
-import { App, reconcileMessageUpdate, reconcileReactionUpdate, reconcileSavedMessage } from './App';
+import {
+  App,
+  reconcileAttentionItem,
+  reconcileMessageUpdate,
+  reconcileReactionUpdate,
+  reconcileSavedMessage,
+} from './App';
 
 describe('application shell', () => {
   it('renders the four-region community experience', () => {
@@ -56,5 +62,23 @@ describe('application shell', () => {
       'account-you',
     );
     expect(removed[0]?.reactions).toEqual([]);
+  });
+
+  it('puts reply attention first without duplicating replayed events', () => {
+    const existing = demoBootstrap.attention[0]!;
+    const reply = {
+      id: 'reply-message-1',
+      kind: 'reply' as const,
+      title: 'Ren replied to you',
+      detail: 'Ready when you are.',
+      createdAt: new Date().toISOString(),
+      unread: true,
+      communityId: 'community-ember',
+      channelId: 'channel-campfire',
+      messageId: 'message-1',
+    };
+
+    expect(reconcileAttentionItem([existing], reply)).toEqual([reply, existing]);
+    expect(reconcileAttentionItem([reply, existing], reply)).toEqual([reply, existing]);
   });
 });

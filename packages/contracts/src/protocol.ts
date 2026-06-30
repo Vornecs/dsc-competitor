@@ -129,6 +129,9 @@ export const attentionItemSchema = z.object({
   detail: z.string().max(240),
   createdAt: z.string().datetime(),
   unread: z.boolean(),
+  communityId: z.string().min(1).optional(),
+  channelId: z.string().min(1).optional(),
+  messageId: z.string().min(1).optional(),
 });
 export type AttentionItem = z.infer<typeof attentionItemSchema>;
 

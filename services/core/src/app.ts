@@ -7,6 +7,7 @@ import {
   demoBootstrap,
   gatewayClientFrameSchema,
   auditEventSchema,
+  attentionItemSchema,
   channelReadStateSchema,
   editMessageRequestSchema,
   messageSchema,
@@ -26,6 +27,7 @@ import {
   permissionSimulatorRequestSchema,
   resolvePermission,
   type Attachment,
+  type AttentionItem,
   type BootstrapState,
   type EventEnvelope,
   type GatewayServerFrame,
@@ -981,6 +983,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
       }
 
       let replyPreview: MessageReplyPreview | undefined;
+      let replyRecipientId: string | undefined;
       if (parsed.data.replyToId) {
         const parent = await repo.getMessage(parsed.data.replyToId);
         if (!parent || parent.channelId !== channel.id) {
@@ -998,6 +1001,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
           authorDisplayName: parent.author.displayName,
           availability: parent.availability,
         };
+        if (parent.author.id !== messageAuthor.id) replyRecipientId = parent.author.id;
       }
 
       const message = messageSchema.parse({
@@ -1015,13 +1019,36 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
       });
       await repo.addMessage(message);
       await repo.setIdempotentMessage(scopedIdempotencyKey, message);
-      hub.publish(
+      const audience = dynamicChannel
+        ? await messageAudience(channel.communityId, 'message.read')
+        : undefined;
+      await hub.publish(
         'message.created',
         message,
         channel.communityId,
         messageAuthor.id,
-        dynamicChannel ? await messageAudience(channel.communityId, 'message.read') : undefined,
+        audience,
       );
+      if (replyRecipientId && audience?.has(replyRecipientId)) {
+        const attentionItem: AttentionItem = attentionItemSchema.parse({
+          id: `reply-${message.id}`,
+          kind: 'reply',
+          title: `${messageAuthor.displayName} replied to you`,
+          detail: message.content.slice(0, 240),
+          createdAt: message.createdAt,
+          unread: true,
+          communityId: channel.communityId,
+          channelId: channel.id,
+          messageId: message.id,
+        });
+        await hub.publish(
+          'attention.item.created',
+          attentionItem,
+          channel.communityId,
+          messageAuthor.id,
+          new Set([replyRecipientId]),
+        );
+      }
       return reply.code(201).send(message);
     },
   );

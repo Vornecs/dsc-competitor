@@ -5,6 +5,7 @@ import {
   createInviteRequestSchema,
   createRoleRequestSchema,
   auditEventSchema,
+  attentionItemSchema,
   channelReadStateSchema,
   demoBootstrap,
   editMessageRequestSchema,
@@ -122,6 +123,24 @@ describe('managed message lifecycle contracts', () => {
         targetId: 'message-1',
         metadata: { channelId: 'channel-1' },
         createdAt: new Date().toISOString(),
+      }).success,
+    ).toBe(true);
+  });
+});
+
+describe('attention contracts', () => {
+  it('validates navigable reply attention items', () => {
+    expect(
+      attentionItemSchema.safeParse({
+        id: 'reply-message-1',
+        kind: 'reply',
+        title: 'Ren replied to you',
+        detail: 'Ready when you are.',
+        createdAt: new Date().toISOString(),
+        unread: true,
+        communityId: 'community-1',
+        channelId: 'channel-1',
+        messageId: 'message-1',
       }).success,
     ).toBe(true);
   });

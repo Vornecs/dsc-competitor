@@ -1,10 +1,12 @@
 import {
   bootstrapStateSchema,
+  attentionItemSchema,
   demoBootstrap,
   gatewayServerFrameSchema,
   messageReactionUpdateSchema,
   messageSchema,
   type BootstrapState,
+  type AttentionItem,
   type Channel,
   type Message,
 } from '@cove/contracts';
@@ -73,6 +75,13 @@ export function reconcileReactionUpdate(
     }
     return { ...message, reactions };
   });
+}
+
+export function reconcileAttentionItem(
+  current: AttentionItem[],
+  incoming: AttentionItem,
+): AttentionItem[] {
+  return [incoming, ...current.filter((item) => item.id !== incoming.id)];
 }
 
 function PrivacyNotice({ channel }: { channel: Channel }) {
@@ -190,6 +199,15 @@ export function App() {
           setMessages((current) =>
             reconcileReactionUpdate(current, update.data, bootstrap.account.id),
           );
+        }
+      }
+      if (frame.op === 'EVENT' && frame.data.type === 'attention.item.created') {
+        const item = attentionItemSchema.safeParse(frame.data.data);
+        if (item.success) {
+          setBootstrap((current) => ({
+            ...current,
+            attention: reconcileAttentionItem(current.attention, item.data),
+          }));
         }
       }
     });
