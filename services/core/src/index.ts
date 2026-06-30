@@ -1,6 +1,8 @@
+import { createMemoryRepository } from './memory-repository.js';
 import { buildApp } from './app.js';
 
-const app = await buildApp();
+const repo = createMemoryRepository();
+const app = await buildApp({ repo });
 const port = Number(process.env.PORT ?? 8790);
 const host = process.env.HOST ?? '127.0.0.1';
 

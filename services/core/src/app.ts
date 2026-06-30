@@ -35,6 +35,8 @@ import {
 } from '@cove/contracts';
 import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify';
 import type { WebSocket } from 'ws';
+import type { Membership, Repository } from './repository.js';
+import { createMemoryRepository } from './memory-repository.js';
 
 const account = demoBootstrap.account;
 
@@ -143,7 +145,12 @@ class GatewayHub {
   }
 }
 
-export async function buildApp(): Promise<FastifyInstance> {
+export interface BuildAppOptions {
+  repo?: Repository;
+}
+
+export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInstance> {
+  const repo = opts.repo ?? createMemoryRepository();
   const app = Fastify({
     logger: {
       level: process.env.LOG_LEVEL ?? 'info',
@@ -154,49 +161,17 @@ export async function buildApp(): Promise<FastifyInstance> {
   const demoCommunityIds = new Set(demoBootstrap.communities.map((community) => community.id));
   const demoChannelIds = new Set(demoBootstrap.channels.map((channel) => channel.id));
   const hub = new GatewayHub(demoCommunityIds);
-  const messages: Message[] = structuredClone(demoBootstrap.messages);
-  const idempotency = new Map<string, Message>();
 
-  // In-memory authentication state
-  const emailChallenges = new Map<
-    string,
-    { code: string; challengeId: string; expiresAt: number }
-  >();
-  const userPasskeys = new Map<
-    string,
-    { credentialId: string; rawId: string; attestationObject: string; clientDataJSON: string }[]
-  >();
-  const sessions = new Map<
-    string,
-    {
-      sessionId: string;
-      email: string;
-      deviceName: string;
-      ipAddress: string;
-      lastActiveAt: string;
-      registrationChallenge?: string;
-    }
-  >();
-  const accountsByEmail = new Map<string, Account>();
+  // Seed demo messages into repository
+  for (const msg of structuredClone(demoBootstrap.messages)) {
+    repo.addMessage(msg);
+  }
 
   // Pre-populate with our demo account
-  accountsByEmail.set('nightshift@cove.chat', demoBootstrap.account);
-
-  // In-memory community state
-  const communities = new Map<string, Community>();
-  const channelsByCommunity = new Map<string, Channel[]>();
-  type Membership = { accountId: string; role: 'owner' | 'admin' | 'member'; roleIds: string[] };
-  const memberships = new Map<string, Membership[]>();
-  const rolesByCommunity = new Map<string, Role[]>();
-  const invitesByCommunity = new Map<string, Invite[]>();
-  const invitesByCode = new Map<string, Invite>();
+  repo.setAccount('nightshift@cove.chat', demoBootstrap.account);
 
   function findDynamicChannel(channelId: string): Channel | undefined {
-    for (const channels of channelsByCommunity.values()) {
-      const channel = channels.find((candidate) => candidate.id === channelId);
-      if (channel) return channel;
-    }
-    return undefined;
+    return repo.findChannelById(channelId);
   }
 
   function resolveMemberPermission(
@@ -205,7 +180,7 @@ export async function buildApp(): Promise<FastifyInstance> {
     memberId: string,
     permission: string,
   ): PermissionDecision {
-    const roles = rolesByCommunity.get(communityId) ?? [];
+    const roles = repo.getRolesByCommunity(communityId);
     const everyoneRole = roles.find((role) => role.managed && role.name === '@everyone');
     const assignedRoles = roles.filter((role) => membership.roleIds.includes(role.id));
     const rules = [
@@ -252,7 +227,7 @@ export async function buildApp(): Promise<FastifyInstance> {
 
   function messageAudience(communityId: string, permission: string): ReadonlySet<string> {
     const audience = new Set<string>();
-    for (const membership of memberships.get(communityId) ?? []) {
+    for (const membership of repo.getMemberships(communityId)) {
       if (
         resolveMemberPermission(communityId, membership, membership.accountId, permission).allowed
       ) {
@@ -263,9 +238,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   }
 
   function getMembership(communityId: string, accountId: string): Membership | undefined {
-    const list = memberships.get(communityId);
-    if (!list) return undefined;
-    return list.find((m) => m.accountId === accountId);
+    return repo.getMembership(communityId, accountId);
   }
 
   function requireMembership(
@@ -295,7 +268,7 @@ export async function buildApp(): Promise<FastifyInstance> {
       return false;
     }
     const token = authHeader.substring(7);
-    const session = sessions.get(token);
+    const session = repo.getSession(token);
     if (!session) {
       problem(reply, 401, 'Unauthorized', 'Session is invalid or has expired.', request.url);
       return false;
@@ -305,7 +278,7 @@ export async function buildApp(): Promise<FastifyInstance> {
     session.lastActiveAt = new Date().toISOString();
 
     // Resolve user account
-    const account = accountsByEmail.get(session.email);
+    const account = repo.getAccountByEmail(session.email);
     if (!account) {
       problem(reply, 401, 'Unauthorized', 'User account not found.', request.url);
       return false;
@@ -319,11 +292,16 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(helmet, { contentSecurityPolicy: false });
   await app.register(websocket);
 
-  const currentBootstrap = (): BootstrapState =>
-    bootstrapStateSchema.parse({
+  const currentBootstrap = (): BootstrapState => {
+    const bootstrapMessages: Message[] = [];
+    for (const channelId of demoChannelIds) {
+      bootstrapMessages.push(...repo.getMessagesByChannel(channelId));
+    }
+    return bootstrapStateSchema.parse({
       ...demoBootstrap,
-      messages: messages.filter((message) => demoChannelIds.has(message.channelId)),
+      messages: bootstrapMessages,
     });
+  };
 
   app.get('/v1/health', async () => ({
     status: 'ok',
@@ -353,7 +331,7 @@ export async function buildApp(): Promise<FastifyInstance> {
     const challengeId = crypto.randomUUID();
     const expiresAt = Date.now() + 10 * 60 * 1000;
 
-    emailChallenges.set(email, { code, challengeId, expiresAt });
+    repo.setEmailChallenge(email, { code, challengeId, expiresAt });
     app.log.info(`[AUTH] Sent code ${code} to ${email} (challenge: ${challengeId})`);
 
     return reply.code(200).send({ success: true, challengeId });
@@ -372,7 +350,7 @@ export async function buildApp(): Promise<FastifyInstance> {
     }
 
     const { email, code, challengeId } = parsed.data;
-    const challenge = emailChallenges.get(email);
+    const challenge = repo.getEmailChallenge(email);
     if (!challenge || challenge.challengeId !== challengeId || challenge.expiresAt < Date.now()) {
       return problem(
         reply,
@@ -387,9 +365,9 @@ export async function buildApp(): Promise<FastifyInstance> {
       return problem(reply, 400, 'Invalid code', 'The code provided is incorrect.', request.url);
     }
 
-    emailChallenges.delete(email);
+    repo.deleteEmailChallenge(email);
 
-    let account = accountsByEmail.get(email);
+    let account = repo.getAccountByEmail(email);
     let isNewUser = false;
     if (!account) {
       isNewUser = true;
@@ -403,7 +381,7 @@ export async function buildApp(): Promise<FastifyInstance> {
         initials: (displayName || 'US').substring(0, 2).toUpperCase(),
         status: 'online',
       };
-      accountsByEmail.set(email, account);
+      repo.setAccount(email, account);
     }
 
     const sessionToken = `sess-${crypto.randomUUID()}`;
@@ -411,7 +389,7 @@ export async function buildApp(): Promise<FastifyInstance> {
     const deviceName = request.headers['user-agent'] || 'Unknown Device';
     const ipAddress = request.ip || '127.0.0.1';
 
-    sessions.set(sessionToken, {
+    repo.setSession(sessionToken, {
       sessionId,
       email,
       deviceName,
@@ -485,9 +463,7 @@ export async function buildApp(): Promise<FastifyInstance> {
     delete userSession.registrationChallenge;
 
     const email = userSession.email;
-    let list = userPasskeys.get(email) || [];
-    list.push({ credentialId, rawId, attestationObject, clientDataJSON });
-    userPasskeys.set(email, list);
+    repo.addPasskey(email, { credentialId, rawId, attestationObject, clientDataJSON });
 
     return reply.code(200).send({ success: true });
   });
@@ -505,10 +481,10 @@ export async function buildApp(): Promise<FastifyInstance> {
     }
 
     const { email } = parsed.data;
-    const credentials = userPasskeys.get(email) || [];
+    const credentials = repo.getPasskeys(email);
 
     const challenge = crypto.randomBytes(32).toString('base64url');
-    emailChallenges.set(`passkey-login-${email}`, {
+    repo.setEmailChallenge(`passkey-login-${email}`, {
       code: challenge,
       challengeId: challenge,
       expiresAt: Date.now() + 10 * 60 * 1000,
@@ -538,7 +514,7 @@ export async function buildApp(): Promise<FastifyInstance> {
 
     const { email, challenge, credentialId, authenticatorData, clientDataJSON, signature } =
       parsed.data;
-    const stored = emailChallenges.get(`passkey-login-${email}`);
+    const stored = repo.getEmailChallenge(`passkey-login-${email}`);
     if (!stored || stored.challengeId !== challenge || stored.expiresAt < Date.now()) {
       return problem(
         reply,
@@ -549,9 +525,9 @@ export async function buildApp(): Promise<FastifyInstance> {
       );
     }
 
-    emailChallenges.delete(`passkey-login-${email}`);
+    repo.deleteEmailChallenge(`passkey-login-${email}`);
 
-    const credentials = userPasskeys.get(email) || [];
+    const credentials = repo.getPasskeys(email);
     const cred = credentials.find((c) => c.credentialId === credentialId);
     if (!cred) {
       return problem(
@@ -573,7 +549,7 @@ export async function buildApp(): Promise<FastifyInstance> {
       );
     }
 
-    const account = accountsByEmail.get(email);
+    const account = repo.getAccountByEmail(email);
     if (!account) {
       return problem(reply, 404, 'Account not found', 'Account not found.', request.url);
     }
@@ -583,7 +559,7 @@ export async function buildApp(): Promise<FastifyInstance> {
     const deviceName = request.headers['user-agent'] || 'Unknown Device';
     const ipAddress = request.ip || '127.0.0.1';
 
-    sessions.set(sessionToken, {
+    repo.setSession(sessionToken, {
       sessionId,
       email,
       deviceName,
@@ -606,16 +582,14 @@ export async function buildApp(): Promise<FastifyInstance> {
     const email = currentSession.email;
 
     const userSessions: DeviceSession[] = [];
-    for (const [token, sess] of sessions.entries()) {
-      if (sess.email === email) {
-        userSessions.push({
-          id: sess.sessionId,
-          deviceName: sess.deviceName,
-          ipAddress: sess.ipAddress,
-          lastActiveAt: sess.lastActiveAt,
-          current: token === currentToken,
-        });
-      }
+    for (const { token, session: sess } of repo.listSessionsByEmail(email)) {
+      userSessions.push({
+        id: sess.sessionId,
+        deviceName: sess.deviceName,
+        ipAddress: sess.ipAddress,
+        lastActiveAt: sess.lastActiveAt,
+        current: token === currentToken,
+      });
     }
 
     return reply.code(200).send({ sessions: userSessions });
@@ -631,9 +605,9 @@ export async function buildApp(): Promise<FastifyInstance> {
       const { sessionId } = request.params;
 
       let found = false;
-      for (const [token, sess] of sessions.entries()) {
-        if (sess.email === currentSession.email && sess.sessionId === sessionId) {
-          sessions.delete(token);
+      for (const { token, session: sess } of repo.listSessionsByEmail(currentSession.email)) {
+        if (sess.sessionId === sessionId) {
+          repo.deleteSession(token);
           found = true;
         }
       }
@@ -693,7 +667,7 @@ export async function buildApp(): Promise<FastifyInstance> {
       }
 
       return reply.code(200).send({
-        items: messages.filter((message) => message.channelId === channel.id),
+        items: repo.getMessagesByChannel(channel.id),
         nextCursor: null,
       });
     },
@@ -773,7 +747,7 @@ export async function buildApp(): Promise<FastifyInstance> {
       }
 
       const scopedIdempotencyKey = `${messageAuthor.id}:${channel.id}:${idempotencyKey}`;
-      const existing = idempotency.get(scopedIdempotencyKey);
+      const existing = repo.getIdempotentMessage(scopedIdempotencyKey);
       if (existing) return reply.code(200).send(existing);
 
       const message = messageSchema.parse({
@@ -786,8 +760,8 @@ export async function buildApp(): Promise<FastifyInstance> {
         editedAt: null,
         reactions: [],
       });
-      messages.push(message);
-      idempotency.set(scopedIdempotencyKey, message);
+      repo.addMessage(message);
+      repo.setIdempotentMessage(scopedIdempotencyKey, message);
       hub.publish(
         'message.created',
         message,
@@ -825,9 +799,8 @@ export async function buildApp(): Promise<FastifyInstance> {
       accent: accent ?? '#6f8cff',
       memberCount: 1,
     };
-    communities.set(communityId, community);
-    memberships.set(communityId, [{ accountId: account.id, role: 'owner', roleIds: [] }]);
-    channelsByCommunity.set(communityId, []);
+    repo.setCommunity(community);
+    repo.addMembership(communityId, { accountId: account.id, role: 'owner', roleIds: [] });
 
     // Create default @everyone role
     const everyoneRole: Role = {
@@ -846,8 +819,7 @@ export async function buildApp(): Promise<FastifyInstance> {
       ],
       createdAt: new Date().toISOString(),
     };
-    rolesByCommunity.set(communityId, [everyoneRole]);
-    invitesByCommunity.set(communityId, []);
+    repo.addRole(everyoneRole);
     hub.grantCommunityAccess(account.id, communityId);
 
     app.log.info(`[COMMUNITY] Created ${communityId} by ${account.id}`);
@@ -859,13 +831,7 @@ export async function buildApp(): Promise<FastifyInstance> {
     if (!ok) return;
 
     const { account } = (request as any).user;
-    const userCommunities: Community[] = [];
-    for (const [communityId, members] of memberships.entries()) {
-      if (members.some((m) => m.accountId === account.id)) {
-        const community = communities.get(communityId);
-        if (community) userCommunities.push(community);
-      }
-    }
+    const userCommunities = repo.listCommunitiesForAccount(account.id);
     return reply.code(200).send({ communities: userCommunities });
   });
 
@@ -876,7 +842,7 @@ export async function buildApp(): Promise<FastifyInstance> {
       if (!ok) return;
 
       const { account } = (request as any).user;
-      const community = communities.get(request.params.communityId);
+      const community = repo.getCommunity(request.params.communityId);
       if (!community) {
         return problem(
           reply,
@@ -899,7 +865,7 @@ export async function buildApp(): Promise<FastifyInstance> {
       if (!ok) return;
 
       const { account } = (request as any).user;
-      const community = communities.get(request.params.communityId);
+      const community = repo.getCommunity(request.params.communityId);
       if (!community) {
         return problem(
           reply,
@@ -910,8 +876,8 @@ export async function buildApp(): Promise<FastifyInstance> {
         );
       }
 
-      const members = memberships.get(community.id) || [];
-      if (members.some((m) => m.accountId === account.id)) {
+      const existingMembership = repo.getMembership(community.id, account.id);
+      if (existingMembership) {
         return problem(
           reply,
           409,
@@ -921,9 +887,8 @@ export async function buildApp(): Promise<FastifyInstance> {
         );
       }
 
-      members.push({ accountId: account.id, role: 'member', roleIds: [] });
-      memberships.set(community.id, members);
-      community.memberCount = members.length;
+      repo.addMembership(community.id, { accountId: account.id, role: 'member', roleIds: [] });
+      community.memberCount = repo.getMemberships(community.id).length;
       hub.grantCommunityAccess(account.id, community.id);
       return reply.code(204).send();
     },
@@ -936,7 +901,7 @@ export async function buildApp(): Promise<FastifyInstance> {
       if (!ok) return;
 
       const { account } = (request as any).user;
-      const community = communities.get(request.params.communityId);
+      const community = repo.getCommunity(request.params.communityId);
       if (!community) {
         return problem(
           reply,
@@ -949,9 +914,9 @@ export async function buildApp(): Promise<FastifyInstance> {
 
       const targetMemberId =
         request.params.memberId === 'me' ? account.id : request.params.memberId;
-      const members = memberships.get(community.id) || [];
-      const targetIndex = members.findIndex((m) => m.accountId === targetMemberId);
-      if (targetIndex === -1) {
+      const members = repo.getMemberships(community.id);
+      const target = members.find((m) => m.accountId === targetMemberId);
+      if (!target) {
         return problem(
           reply,
           404,
@@ -961,8 +926,8 @@ export async function buildApp(): Promise<FastifyInstance> {
         );
       }
 
-      const selfIndex = members.findIndex((m) => m.accountId === account.id);
-      const selfRole = selfIndex >= 0 ? members[selfIndex]!.role : null;
+      const selfMembership = repo.getMembership(community.id, account.id);
+      const selfRole = selfMembership?.role ?? null;
       const isSelf = targetMemberId === account.id;
       const isOwner = selfRole === 'owner';
 
@@ -986,20 +951,17 @@ export async function buildApp(): Promise<FastifyInstance> {
         );
       }
 
-      members.splice(targetIndex, 1);
+      repo.removeMembership(community.id, targetMemberId);
       hub.revokeCommunityAccess(targetMemberId, community.id);
-      if (members.length === 0) {
-        for (const invite of invitesByCommunity.get(community.id) ?? []) {
-          invitesByCode.delete(invite.code);
-        }
-        memberships.delete(community.id);
-        communities.delete(community.id);
-        channelsByCommunity.delete(community.id);
-        rolesByCommunity.delete(community.id);
-        invitesByCommunity.delete(community.id);
+      const remaining = repo.getMemberships(community.id);
+      if (remaining.length === 0) {
+        repo.clearInvites(community.id);
+        repo.clearMemberships(community.id);
+        repo.deleteCommunity(community.id);
+        repo.clearChannels(community.id);
+        repo.clearRoles(community.id);
       } else {
-        memberships.set(community.id, members);
-        community.memberCount = members.length;
+        community.memberCount = remaining.length;
       }
       return reply.code(204).send();
     },
@@ -1013,7 +975,7 @@ export async function buildApp(): Promise<FastifyInstance> {
       if (!ok) return;
 
       const { account } = (request as any).user;
-      const community = communities.get(request.params.communityId);
+      const community = repo.getCommunity(request.params.communityId);
       if (!community) {
         return problem(
           reply,
@@ -1064,9 +1026,7 @@ export async function buildApp(): Promise<FastifyInstance> {
         },
         participants: [],
       };
-      const list = channelsByCommunity.get(community.id) || [];
-      list.push(channel);
-      channelsByCommunity.set(community.id, list);
+      repo.addChannel(channel);
       hub.publish('channel.created', channel, community.id, account.id);
       return reply.code(201).send(channel);
     },
@@ -1079,7 +1039,7 @@ export async function buildApp(): Promise<FastifyInstance> {
       if (!ok) return;
 
       const { account } = (request as any).user;
-      const community = communities.get(request.params.communityId);
+      const community = repo.getCommunity(request.params.communityId);
       if (!community) {
         return problem(
           reply,
@@ -1092,7 +1052,7 @@ export async function buildApp(): Promise<FastifyInstance> {
       const membership = requireMembership(reply, community.id, account.id, request.url);
       if (!membership) return;
 
-      const list = channelsByCommunity.get(community.id) || [];
+      const list = repo.getChannelsByCommunity(community.id);
       return reply.code(200).send({ channels: list });
     },
   );
@@ -1105,7 +1065,7 @@ export async function buildApp(): Promise<FastifyInstance> {
       if (!ok) return;
 
       const { account } = (request as any).user;
-      const community = communities.get(request.params.communityId);
+      const community = repo.getCommunity(request.params.communityId);
       if (!community) {
         return problem(
           reply,
@@ -1152,9 +1112,7 @@ export async function buildApp(): Promise<FastifyInstance> {
         permissions: permissions ?? [],
         createdAt: new Date().toISOString(),
       };
-      const roles = rolesByCommunity.get(community.id) || [];
-      roles.push(role);
-      rolesByCommunity.set(community.id, roles);
+      repo.addRole(role);
       hub.publish('role.created', role, community.id, account.id);
       return reply.code(201).send(role);
     },
@@ -1167,7 +1125,7 @@ export async function buildApp(): Promise<FastifyInstance> {
       if (!ok) return;
 
       const { account } = (request as any).user;
-      const community = communities.get(request.params.communityId);
+      const community = repo.getCommunity(request.params.communityId);
       if (!community) {
         return problem(
           reply,
@@ -1180,7 +1138,7 @@ export async function buildApp(): Promise<FastifyInstance> {
       const membership = requireMembership(reply, community.id, account.id, request.url);
       if (!membership) return;
 
-      const roles = rolesByCommunity.get(community.id) || [];
+      const roles = repo.getRolesByCommunity(community.id);
       return reply.code(200).send({ roles });
     },
   );
@@ -1192,7 +1150,7 @@ export async function buildApp(): Promise<FastifyInstance> {
       if (!ok) return;
 
       const { account } = (request as any).user;
-      const community = communities.get(request.params.communityId);
+      const community = repo.getCommunity(request.params.communityId);
       if (!community) {
         return problem(
           reply,
@@ -1205,7 +1163,7 @@ export async function buildApp(): Promise<FastifyInstance> {
       const membership = requireMembership(reply, community.id, account.id, request.url);
       if (!membership) return;
 
-      const roles = rolesByCommunity.get(community.id) || [];
+      const roles = repo.getRolesByCommunity(community.id);
       const role = roles.find((r) => r.id === request.params.roleId);
       if (!role) {
         return problem(
@@ -1227,7 +1185,7 @@ export async function buildApp(): Promise<FastifyInstance> {
       if (!ok) return;
 
       const { account } = (request as any).user;
-      const community = communities.get(request.params.communityId);
+      const community = repo.getCommunity(request.params.communityId);
       if (!community) {
         return problem(
           reply,
@@ -1260,7 +1218,7 @@ export async function buildApp(): Promise<FastifyInstance> {
         );
       }
 
-      const roles = rolesByCommunity.get(community.id) || [];
+      const roles = repo.getRolesByCommunity(community.id);
       const roleIndex = roles.findIndex((r) => r.id === request.params.roleId);
       if (roleIndex === -1) {
         return problem(
@@ -1296,8 +1254,7 @@ export async function buildApp(): Promise<FastifyInstance> {
         managed: false,
         createdAt: existingRole.createdAt,
       };
-      roles[roleIndex] = updatedRole;
-      rolesByCommunity.set(community.id, roles);
+      repo.updateRole(community.id, request.params.roleId, updatedRole);
       hub.publish('role.updated', updatedRole, community.id, account.id);
       return reply.code(200).send(updatedRole);
     },
@@ -1310,7 +1267,7 @@ export async function buildApp(): Promise<FastifyInstance> {
       if (!ok) return;
 
       const { account } = (request as any).user;
-      const community = communities.get(request.params.communityId);
+      const community = repo.getCommunity(request.params.communityId);
       if (!community) {
         return problem(
           reply,
@@ -1332,7 +1289,7 @@ export async function buildApp(): Promise<FastifyInstance> {
         );
       }
 
-      const roles = rolesByCommunity.get(community.id) || [];
+      const roles = repo.getRolesByCommunity(community.id);
       const roleIndex = roles.findIndex((r) => r.id === request.params.roleId);
       if (roleIndex === -1) {
         return problem(
@@ -1349,11 +1306,8 @@ export async function buildApp(): Promise<FastifyInstance> {
         return problem(reply, 403, 'Forbidden', 'Managed roles cannot be deleted.', request.url);
       }
 
-      roles.splice(roleIndex, 1);
-      rolesByCommunity.set(community.id, roles);
-      for (const member of memberships.get(community.id) ?? []) {
-        member.roleIds = member.roleIds.filter((roleId) => roleId !== role.id);
-      }
+      repo.deleteRole(community.id, role.id);
+      repo.removeRoleFromAllMembers(community.id, role.id);
       hub.publish(
         'role.deleted',
         { roleId: role.id, communityId: community.id },
@@ -1371,7 +1325,7 @@ export async function buildApp(): Promise<FastifyInstance> {
       if (!ok) return;
 
       const { account } = (request as any).user;
-      const community = communities.get(request.params.communityId);
+      const community = repo.getCommunity(request.params.communityId);
       if (!community) {
         return problem(
           reply,
@@ -1403,9 +1357,9 @@ export async function buildApp(): Promise<FastifyInstance> {
           request.url,
         );
       }
-      const role = (rolesByCommunity.get(community.id) ?? []).find(
-        (candidate) => candidate.id === request.params.roleId,
-      );
+      const role = repo
+        .getRolesByCommunity(community.id)
+        .find((candidate) => candidate.id === request.params.roleId);
       if (!role) {
         return problem(
           reply,
@@ -1425,8 +1379,7 @@ export async function buildApp(): Promise<FastifyInstance> {
         );
       }
 
-      if (!targetMembership.roleIds.includes(role.id)) {
-        targetMembership.roleIds.push(role.id);
+      if (repo.assignRoleToMember(community.id, request.params.memberId, role.id)) {
         hub.publish(
           'member.role_assigned',
           { communityId: community.id, memberId: request.params.memberId, roleId: role.id },
@@ -1445,7 +1398,7 @@ export async function buildApp(): Promise<FastifyInstance> {
       if (!ok) return;
 
       const { account } = (request as any).user;
-      const community = communities.get(request.params.communityId);
+      const community = repo.getCommunity(request.params.communityId);
       if (!community) {
         return problem(
           reply,
@@ -1477,9 +1430,9 @@ export async function buildApp(): Promise<FastifyInstance> {
           request.url,
         );
       }
-      const role = (rolesByCommunity.get(community.id) ?? []).find(
-        (candidate) => candidate.id === request.params.roleId,
-      );
+      const role = repo
+        .getRolesByCommunity(community.id)
+        .find((candidate) => candidate.id === request.params.roleId);
       if (!role) {
         return problem(
           reply,
@@ -1490,7 +1443,7 @@ export async function buildApp(): Promise<FastifyInstance> {
         );
       }
 
-      targetMembership.roleIds = targetMembership.roleIds.filter((roleId) => roleId !== role.id);
+      repo.removeRoleFromMember(community.id, request.params.memberId, role.id);
       hub.publish(
         'member.role_removed',
         { communityId: community.id, memberId: request.params.memberId, roleId: role.id },
@@ -1509,7 +1462,7 @@ export async function buildApp(): Promise<FastifyInstance> {
       if (!ok) return;
 
       const { account } = (request as any).user;
-      const community = communities.get(request.params.communityId);
+      const community = repo.getCommunity(request.params.communityId);
       if (!community) {
         return problem(
           reply,
@@ -1561,10 +1514,7 @@ export async function buildApp(): Promise<FastifyInstance> {
         uses: 0,
       };
 
-      const invites = invitesByCommunity.get(community.id) || [];
-      invites.push(invite);
-      invitesByCommunity.set(community.id, invites);
-      invitesByCode.set(code, invite);
+      repo.addInvite(invite);
 
       const url = `https://cove.chat/invite/${code}`;
 
@@ -1585,7 +1535,7 @@ export async function buildApp(): Promise<FastifyInstance> {
       if (!ok) return;
 
       const { account } = (request as any).user;
-      const community = communities.get(request.params.communityId);
+      const community = repo.getCommunity(request.params.communityId);
       if (!community) {
         return problem(
           reply,
@@ -1607,11 +1557,13 @@ export async function buildApp(): Promise<FastifyInstance> {
         );
       }
 
-      const invites = (invitesByCommunity.get(community.id) ?? []).filter(
-        (invite) =>
-          new Date(invite.expiresAt).getTime() > Date.now() &&
-          (invite.maxUses === null || invite.uses < invite.maxUses),
-      );
+      const invites = repo
+        .getInvitesByCommunity(community.id)
+        .filter(
+          (invite) =>
+            new Date(invite.expiresAt).getTime() > Date.now() &&
+            (invite.maxUses === null || invite.uses < invite.maxUses),
+        );
       return reply.code(200).send({ invites });
     },
   );
@@ -1623,7 +1575,7 @@ export async function buildApp(): Promise<FastifyInstance> {
       if (!ok) return;
 
       const { account } = (request as any).user;
-      const community = communities.get(request.params.communityId);
+      const community = repo.getCommunity(request.params.communityId);
       if (!community) {
         return problem(
           reply,
@@ -1645,9 +1597,9 @@ export async function buildApp(): Promise<FastifyInstance> {
         );
       }
 
-      const invites = invitesByCommunity.get(community.id) ?? [];
-      const inviteIndex = invites.findIndex((invite) => invite.id === request.params.inviteId);
-      if (inviteIndex === -1) {
+      const invites = repo.getInvitesByCommunity(community.id);
+      const inviteMatch = invites.find((invite) => invite.id === request.params.inviteId);
+      if (!inviteMatch) {
         return problem(
           reply,
           404,
@@ -1656,8 +1608,7 @@ export async function buildApp(): Promise<FastifyInstance> {
           request.url,
         );
       }
-      const [invite] = invites.splice(inviteIndex, 1);
-      if (invite) invitesByCode.delete(invite.code);
+      repo.deleteInvite(community.id, request.params.inviteId);
       hub.publish(
         'invite.revoked',
         { communityId: community.id, inviteId: request.params.inviteId },
@@ -1673,7 +1624,7 @@ export async function buildApp(): Promise<FastifyInstance> {
     if (!ok) return;
 
     const { account } = (request as any).user;
-    const invite = invitesByCode.get(request.params.code);
+    const invite = repo.getInviteByCode(request.params.code);
     if (!invite) {
       return problem(
         reply,
@@ -1684,7 +1635,7 @@ export async function buildApp(): Promise<FastifyInstance> {
       );
     }
 
-    const community = communities.get(invite.communityId);
+    const community = repo.getCommunity(invite.communityId);
     if (!community) {
       return problem(
         reply,
@@ -1696,8 +1647,8 @@ export async function buildApp(): Promise<FastifyInstance> {
     }
 
     // Check if already a member
-    const members = memberships.get(community.id) || [];
-    if (members.some((m) => m.accountId === account.id)) {
+    const existingMember = repo.getMembership(community.id, account.id);
+    if (existingMember) {
       return problem(
         reply,
         409,
@@ -1724,14 +1675,13 @@ export async function buildApp(): Promise<FastifyInstance> {
     }
 
     // Add member
-    members.push({ accountId: account.id, role: 'member', roleIds: [] });
-    memberships.set(community.id, members);
-    community.memberCount = members.length;
+    repo.addMembership(community.id, { accountId: account.id, role: 'member', roleIds: [] });
+    community.memberCount = repo.getMemberships(community.id).length;
     hub.grantCommunityAccess(account.id, community.id);
 
     // Update invite uses
     invite.uses += 1;
-    invitesByCode.set(request.params.code, invite);
+    repo.updateInvite(invite);
 
     hub.publish(
       'member.joined',
@@ -1791,14 +1741,12 @@ export async function buildApp(): Promise<FastifyInstance> {
     const headerToken = authorization?.startsWith('Bearer ')
       ? authorization.substring(7)
       : undefined;
-    const session = sessions.get(queryToken ?? headerToken ?? '');
-    const gatewayAccount = session ? accountsByEmail.get(session.email) : undefined;
+    const session = repo.getSession(queryToken ?? headerToken ?? '');
+    const gatewayAccount = session ? repo.getAccountByEmail(session.email) : undefined;
     const accessibleCommunityIds = new Set<string>();
     if (gatewayAccount) {
-      for (const [communityId, members] of memberships) {
-        if (members.some((member) => member.accountId === gatewayAccount.id)) {
-          accessibleCommunityIds.add(communityId);
-        }
+      for (const community of repo.listCommunitiesForAccount(gatewayAccount.id)) {
+        accessibleCommunityIds.add(community.id);
       }
     }
     hub.connect(socket, currentBootstrap(), gatewayAccount?.id, accessibleCommunityIds);

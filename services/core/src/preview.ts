@@ -1,9 +1,11 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createMemoryRepository } from './memory-repository.js';
 import { buildApp } from './app.js';
 
-const app = await buildApp();
+const repo = createMemoryRepository();
+const app = await buildApp({ repo });
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
 const webRoot = path.resolve(currentDirectory, '../../../apps/web/dist');
 
