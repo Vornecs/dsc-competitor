@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
   channelPrivacyPolicySchema,
+  channelSchema,
   createInviteRequestSchema,
   createRoleRequestSchema,
   demoBootstrap,
   gatewayServerFrameSchema,
   resolvePermission,
+  stageConfigSchema,
 } from './index.js';
 
 describe('privacy contracts', () => {
@@ -89,5 +91,86 @@ describe('role and invite contracts', () => {
     expect(createInviteRequestSchema.safeParse({ expiresInSeconds: 300 }).success).toBe(true);
     expect(createInviteRequestSchema.safeParse({ expiresInSeconds: 30 }).success).toBe(false);
     expect(createInviteRequestSchema.safeParse({ maxUses: 1_001 }).success).toBe(false);
+  });
+});
+
+describe('stage channels', () => {
+  it('accepts a stage channel with broadcast keybind', () => {
+    const result = channelSchema.safeParse({
+      id: 'stage-1',
+      communityId: 'community-ember',
+      name: 'Main Stage',
+      kind: 'stage',
+      category: 'Voice',
+      topic: 'Broadcast channel.',
+      privacy: {
+        mode: 'sealed',
+        searchableByServer: false,
+        appsMayReadContent: false,
+        deletedContentRecoveryDays: 0,
+        evidenceRetentionDays: 0,
+      },
+      stageConfig: { broadcastKeybind: 'Ctrl+Shift+V' },
+      participants: [],
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it('accepts a stage channel without a keybind', () => {
+    const result = channelSchema.safeParse({
+      id: 'stage-2',
+      communityId: 'community-ember',
+      name: 'Open Mic',
+      kind: 'stage',
+      category: 'Voice',
+      topic: 'Always-on broadcast.',
+      privacy: {
+        mode: 'managed',
+        searchableByServer: true,
+        appsMayReadContent: false,
+        deletedContentRecoveryDays: 7,
+        evidenceRetentionDays: 90,
+      },
+      participants: [],
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it('accepts a voice subchannel parented under a stage channel', () => {
+    const result = channelSchema.safeParse({
+      id: 'sub-1',
+      communityId: 'community-ember',
+      name: 'Squad Alpha',
+      kind: 'voice',
+      category: 'Voice',
+      topic: 'Subchannel under Main Stage.',
+      privacy: {
+        mode: 'sealed',
+        searchableByServer: false,
+        appsMayReadContent: false,
+        deletedContentRecoveryDays: 0,
+        evidenceRetentionDays: 0,
+      },
+      parentChannelId: 'stage-1',
+      participants: [],
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects a stage channel with an overly long keybind', () => {
+    const result = stageConfigSchema.safeParse({
+      broadcastKeybind: 'A'.repeat(33),
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it('accepts stage config without a keybind', () => {
+    const result = stageConfigSchema.safeParse({});
+
+    expect(result.success).toBe(true);
   });
 });

@@ -41,14 +41,21 @@ export const participantSchema = accountSchema.pick({
 });
 export type Participant = z.infer<typeof participantSchema>;
 
+export const stageConfigSchema = z.object({
+  broadcastKeybind: z.string().max(32).optional(),
+});
+export type StageConfig = z.infer<typeof stageConfigSchema>;
+
 export const channelSchema = z.object({
   id: z.string().min(1),
   communityId: z.string().min(1),
   name: z.string().min(1).max(80),
-  kind: z.enum(['text', 'voice']),
+  kind: z.enum(['text', 'voice', 'stage']),
   category: z.string().min(1).max(80),
   topic: z.string().max(240),
   privacy: channelPrivacyPolicySchema,
+  parentChannelId: z.string().min(1).optional(),
+  stageConfig: stageConfigSchema.optional(),
   participants: z.array(participantSchema).default([]),
 });
 export type Channel = z.infer<typeof channelSchema>;
