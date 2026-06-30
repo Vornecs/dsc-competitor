@@ -1,10 +1,10 @@
 # Cove Product Plan
 
-> Last updated: 2026-06-29 | Cycle: 14 | Phase: 1 — Core Features | Build health: verified; account-targeted reply attention live
+> Last updated: 2026-06-30 | Cycle: 15 | Phase: 1 — Core Features | Build health: verified; community member presence and web participant reconciliation live
 >
-> Current objective: Cycle 14 delivered account-targeted `attention.item.created` gateway events for replies, permission-safe recipient filtering, navigable attention metadata, and idempotent web attention-center reconciliation.
+> Current objective: Cycle 15 delivered community member presence contracts, multi-session-safe gateway connect/disconnect fanout, and presence reconciliation in the web participant surfaces.
 >
-> Next gate: community member presence (online/idle/do-not-disturb/offline contracts and gateway connect/disconnect fanout), followed by presence reconciliation in the web participant surfaces.
+> Next gate: audit events, backups, restore drill, deployable web client, and operator diagnostics.
 
 This file is the authoritative product, architecture, and delivery record. A behavior or scope change is incomplete until this file is reconciled in the same work cycle.
 
@@ -171,15 +171,16 @@ Administrator bypass never applies to ownership, billing, security, or private m
 | P1-006 | verified    | Managed message lifecycle and audit trail          | Author-only edits; author or `message.manage` soft-deletes; idempotent permission-gated reactions; private per-account read state; metadata-only audit events; gateway/client reconciliation; PostgreSQL migration 003.                                           | 69 tests pass (39 core + 11 contracts + 5 web + 14 desktop); strict typecheck; production build 87.55 kB gzip JS / 4.20 kB gzip CSS; format clean; production and full audits report 0 vulnerabilities.                                                                                                        |
 | P1-007 | verified    | Ordered migration runner and same-channel replies  | `runMigrations(pool)` creates `schema_migrations` ledger, runs pending `.sql` files in filename order inside transactions, rolls back on failure; `004_replies.sql` adds `reply_to_id` FK; `replyToId` + `replyPreview` on message contract and send route.       | 75 tests pass (45 core + 11 contracts + 5 web + 14 desktop); strict typecheck; production build 87.60 kB gzip JS / 4.20 kB gzip CSS; format clean; 0 production vulnerabilities.                                                                                                                               |
 | P1-008 | verified    | Account-targeted reply attention                   | Replies emit a navigable `attention.item.created` event only to the original author when they retain channel read access; self-replies do not notify; the web client deduplicates replayed attention items.                                                       | 78 tests pass (46 core + 12 contracts + 6 web + 14 desktop); strict typecheck; production build 87.66 kB gzip JS / 4.20 kB gzip CSS; changed-scope format clean; production and full audits report 0 vulnerabilities.                                                                                          |
+| P1-009 | verified    | Community member presence                          | Online/idle/do-not-disturb/offline contracts and gateway connect/disconnect fanout, with multi-session-safe offline transitions, and web client participant presence reconciliation.                                                                               | 80 tests pass (47 core + 13 contracts + 6 web + 14 desktop); strict typecheck; production build 87.77 kB gzip JS / 4.20 kB gzip CSS; formatting clean; 0 production vulnerabilities.                                                                                                                   |
 
 ## Quality dashboard
 
 | Area             | Current          | Gate                                                                                                                                                                                                                             |
 | ---------------- | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Install          | verified         | `npm install` completed and generated a locked workspace graph.                                                                                                                                                                  |
-| Unit tests       | verified         | 78 tests pass: 6 web, 46 core (including migration, reply, and targeted gateway attention), 12 contracts, 14 desktop (3 gate + 11 PTT), 0 ui.                                                                                    |
+| Unit tests       | verified         | 80 tests pass: 6 web, 47 core (including migration, reply, targeted gateway attention, and member presence), 13 contracts, 14 desktop (3 gate + 11 PTT), 0 ui.                                                                                   |
 | Type safety      | verified         | All five workspaces pass strict TypeScript.                                                                                                                                                                                      |
-| Production build | verified         | Client output is 87.66 kB gzip JavaScript and 4.20 kB gzip CSS.                                                                                                                                                                  |
+| Production build | verified         | Client output is 87.77 kB gzip JavaScript and 4.20 kB gzip CSS.                                                                                                                                                                  |
 | API integration  | verified         | Health, bootstrap, authenticated community/role/invite/message lifecycle mutations, audit reads, private read state, same-channel replies, targeted reply attention, gateway, device sessions, integrated HTML, and assets pass. |
 | Accessibility    | partial          | Semantic UI tests and accessible modes exist; real-browser review remains blocked.                                                                                                                                               |
 | Performance      | partial          | Electron renderer loaded in 2.392 s once; a 464 MB summed startup working-set snapshot signals risk. PTT harness UI added; warm/idle p95 and soak remain unmeasured.                                                             |
@@ -201,6 +202,15 @@ Administrator bypass never applies to ownership, billing, security, or private m
 | UI becomes unstable or decorative               | Medium      | High     | Semantic design system, visual regression, density modes, measured navigation-change policy.                                                                                                    |
 
 ## Recent session checkpoints
+
+### Cycle 15 — 2026-06-30 — completed
+
+- Objective: add community member presence contracts and gateway fanout for authenticated connect/disconnect, with multi-session-safe offline transitions; then reconcile presence in web participant surfaces.
+- Delivered: `presenceUpdateSchema` and `PresenceUpdate` type on `@cove/contracts`.
+- Delivered: `GatewayHub` presence connect/disconnect session tracking and state persistence. When a user connects their first active gateway WebSocket session, their status transitions to `'online'` in the database, and a `'presence.updated'` event is fanned out to all communities they belong to. When their last active session closes, their status transitions to `'offline'` and a `'presence.updated'` event is fanned out to their communities.
+- Delivered: `App.tsx` handles the `'presence.updated'` gateway events and reconciles member status updates dynamically in the user profile, participant sidebar list, and message author indicators.
+- Verification: 80 tests pass (47 core + 13 contracts + 6 web + 14 desktop); all workspaces pass strict TypeScript; production build succeeds at 87.77 kB gzip JavaScript and 4.20 kB gzip CSS; changed-scope Prettier clean; 0 production vulnerabilities.
+- Next: add audit event log backups, restore drill, deployable web client, and operator diagnostics.
 
 ### Cycle 14 — 2026-06-29 — completed
 

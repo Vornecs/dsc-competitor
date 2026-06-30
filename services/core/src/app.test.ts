@@ -7,6 +7,7 @@ import {
 import { afterEach, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
 import { buildApp } from './app.js';
+import { createMemoryRepository } from './memory-repository.js';
 
 const apps: Awaited<ReturnType<typeof buildApp>>[] = [];
 
@@ -1684,5 +1685,133 @@ describe('managed message lifecycle', () => {
 
     ownerSocket.close();
     memberSocket.close();
+  });
+
+  it('updates member presence online/offline with multi-session-safe transitions and gateway fanout', async () => {
+    const repo = createMemoryRepository();
+    const app = await buildApp({ repo });
+    apps.push(app);
+
+    const email1 = `p1-${crypto.randomUUID()}@test.cove.chat`;
+    const email2 = `p2-${crypto.randomUUID()}@test.cove.chat`;
+
+    const getSession = async (email: string) => {
+      const sendRes = await app.inject({
+        method: 'POST',
+        url: '/v1/auth/email/send-code',
+        payload: { email },
+      });
+      const verifyRes = await app.inject({
+        method: 'POST',
+        url: '/v1/auth/email/verify',
+        payload: { email, code: '123456', challengeId: sendRes.json().challengeId },
+      });
+      return {
+        token: verifyRes.json().sessionToken as string,
+        accountId: verifyRes.json().account.id as string,
+      };
+    };
+
+    const user1 = await getSession(email1);
+    const user2 = await getSession(email2);
+
+    await app.listen({ host: '127.0.0.1', port: 0 });
+    const address = app.server.address();
+    if (!address || typeof address === 'string') throw new Error('Expected a TCP test address');
+
+    const communityRes = await app.inject({
+      method: 'POST',
+      url: '/v1/communities',
+      headers: { authorization: `Bearer ${user1.token}` },
+      payload: { name: 'Presence Community' },
+    });
+    const communityId = communityRes.json().id;
+
+    const inviteRes = await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/invites`,
+      headers: { authorization: `Bearer ${user1.token}` },
+      payload: {},
+    });
+    const inviteCode = inviteRes.json().invite.code;
+
+    await app.inject({
+      method: 'POST',
+      url: `/v1/invites/${inviteCode}`,
+      headers: { authorization: `Bearer ${user2.token}` },
+    });
+
+    const acct1 = await repo.getAccountByEmail(email1);
+    if (acct1) {
+      await repo.setAccount(email1, { ...acct1, status: 'offline' });
+    }
+
+    const socket2 = new WebSocket(
+      `ws://127.0.0.1:${address.port}/v1/gateway?token=${encodeURIComponent(user2.token)}`,
+    );
+
+    const waitForReady = (socket: WebSocket) =>
+      new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error('Gateway READY timed out')), 3_000);
+        socket.on('message', (raw) => {
+          const frame = JSON.parse(raw.toString());
+          if (frame.op === 'READY') {
+            clearTimeout(timeout);
+            resolve();
+          }
+        });
+        socket.on('error', reject);
+      });
+
+    await waitForReady(socket2);
+
+    const presenceUpdates: any[] = [];
+    socket2.on('message', (raw) => {
+      const frame = JSON.parse(raw.toString());
+      if (frame.op === 'EVENT' && frame.data.type === 'presence.updated') {
+        presenceUpdates.push(frame.data.data);
+      }
+    });
+
+    const socket1a = new WebSocket(
+      `ws://127.0.0.1:${address.port}/v1/gateway?token=${encodeURIComponent(user1.token)}`,
+    );
+    await waitForReady(socket1a);
+
+    let check1 = await repo.getAccountByEmail(email1);
+    expect(check1?.status).toBe('online');
+
+    const socket1b = new WebSocket(
+      `ws://127.0.0.1:${address.port}/v1/gateway?token=${encodeURIComponent(user1.token)}`,
+    );
+    await waitForReady(socket1b);
+
+    await new Promise<void>((resolve) => {
+      socket1a.on('close', () => resolve());
+      socket1a.close();
+    });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    let check2 = await repo.getAccountByEmail(email1);
+    expect(check2?.status).toBe('online');
+
+    await new Promise<void>((resolve) => {
+      socket1b.on('close', () => resolve());
+      socket1b.close();
+    });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    let check3 = await repo.getAccountByEmail(email1);
+    expect(check3?.status).toBe('offline');
+
+    await new Promise<void>((resolve) => {
+      socket2.on('close', () => resolve());
+      socket2.close();
+    });
+
+    expect(presenceUpdates).toEqual([
+      { accountId: user1.accountId, status: 'online' },
+      { accountId: user1.accountId, status: 'offline' },
+    ]);
   });
 });

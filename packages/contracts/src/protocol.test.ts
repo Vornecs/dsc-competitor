@@ -13,6 +13,7 @@ import {
   messageReactionRequestSchema,
   resolvePermission,
   stageConfigSchema,
+  presenceUpdateSchema,
 } from './index.js';
 
 describe('privacy contracts', () => {
@@ -224,5 +225,26 @@ describe('stage channels', () => {
     const result = stageConfigSchema.safeParse({});
 
     expect(result.success).toBe(true);
+  });
+});
+
+describe('presence contracts', () => {
+  it('validates presence update payload shapes', () => {
+    const valid = presenceUpdateSchema.safeParse({
+      accountId: 'account-123',
+      status: 'online',
+    });
+    expect(valid.success).toBe(true);
+
+    const invalidStatus = presenceUpdateSchema.safeParse({
+      accountId: 'account-123',
+      status: 'unknown',
+    });
+    expect(invalidStatus.success).toBe(false);
+
+    const missingFields = presenceUpdateSchema.safeParse({
+      status: 'offline',
+    });
+    expect(missingFields.success).toBe(false);
   });
 });

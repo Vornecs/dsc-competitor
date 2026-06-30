@@ -33,6 +33,12 @@ export const accountSchema = z.object({
 });
 export type Account = z.infer<typeof accountSchema>;
 
+export const presenceUpdateSchema = z.object({
+  accountId: z.string().min(1),
+  status: z.enum(['online', 'idle', 'do-not-disturb', 'offline']),
+});
+export type PresenceUpdate = z.infer<typeof presenceUpdateSchema>;
+
 export const participantSchema = accountSchema.pick({
   id: true,
   displayName: true,

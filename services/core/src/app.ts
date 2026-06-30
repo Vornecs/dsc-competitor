@@ -87,6 +87,7 @@ class GatewayHub {
   constructor(
     private readonly publicCommunityIds: ReadonlySet<string>,
     private readonly coordinator: GatewayCoordinator,
+    private readonly repo: Repository,
   ) {
     void this.subscribe();
   }
@@ -121,6 +122,7 @@ class GatewayHub {
     bootstrap: BootstrapState,
     accountId: string | undefined,
     communityIds: ReadonlySet<string>,
+    email: string | undefined,
   ) {
     const sequence = await this.coordinator.currentSequence();
     this.clients.set(socket, {
@@ -133,6 +135,27 @@ class GatewayHub {
         communityIds: Array.from(communityIds),
         updatedAt: new Date().toISOString(),
       });
+
+      const sessionCount = Array.from(this.clients.values()).filter(
+        (c) => c.accountId === accountId,
+      ).length;
+      if (sessionCount === 1 && email) {
+        const latestAccount = await this.repo.getAccountByEmail(email);
+        if (latestAccount) {
+          const updatedAccount = { ...latestAccount, status: 'online' as const };
+          await this.repo.setAccount(email, updatedAccount);
+        }
+        for (const communityId of communityIds) {
+          await this.publish(
+            'presence.updated',
+            {
+              accountId,
+              status: 'online',
+            },
+            communityId,
+          );
+        }
+      }
     }
     const frame: GatewayServerFrame = {
       op: 'READY',
@@ -143,9 +166,31 @@ class GatewayHub {
       },
     };
     socket.send(JSON.stringify(frame));
-    socket.on('close', () => {
+    socket.on('close', async () => {
       this.clients.delete(socket);
-      if (accountId) void this.coordinator.deleteResumeState(accountId);
+      if (accountId && email) {
+        const remainingSessions = Array.from(this.clients.values()).filter(
+          (c) => c.accountId === accountId,
+        ).length;
+        if (remainingSessions === 0) {
+          const latestAccount = await this.repo.getAccountByEmail(email);
+          if (latestAccount) {
+            const updatedAccount = { ...latestAccount, status: 'offline' as const };
+            await this.repo.setAccount(email, updatedAccount);
+          }
+          for (const communityId of communityIds) {
+            await this.publish(
+              'presence.updated',
+              {
+                accountId,
+                status: 'offline',
+              },
+              communityId,
+            );
+          }
+          await this.coordinator.deleteResumeState(accountId);
+        }
+      }
     });
   }
 
@@ -241,7 +286,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
   });
   const demoCommunityIds = new Set(demoBootstrap.communities.map((community) => community.id));
   const demoChannelIds = new Set(demoBootstrap.channels.map((channel) => channel.id));
-  const hub = new GatewayHub(demoCommunityIds, coordinator);
+  const hub = new GatewayHub(demoCommunityIds, coordinator, repo);
 
   // Seed demo messages into repository
   for (const msg of structuredClone(demoBootstrap.messages)) {
@@ -2570,7 +2615,13 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
         accessibleCommunityIds.add(community.id);
       }
     }
-    await hub.connect(socket, await currentBootstrap(), gatewayAccount?.id, accessibleCommunityIds);
+    await hub.connect(
+      socket,
+      await currentBootstrap(),
+      gatewayAccount?.id,
+      accessibleCommunityIds,
+      session?.email,
+    );
     socket.on('message', async (raw) => {
       let decoded: unknown;
       try {

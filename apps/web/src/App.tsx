@@ -5,6 +5,7 @@ import {
   gatewayServerFrameSchema,
   messageReactionUpdateSchema,
   messageSchema,
+  presenceUpdateSchema,
   type BootstrapState,
   type AttentionItem,
   type Channel,
@@ -208,6 +209,28 @@ export function App() {
             ...current,
             attention: reconcileAttentionItem(current.attention, item.data),
           }));
+        }
+      }
+      if (frame.op === 'EVENT' && frame.data.type === 'presence.updated') {
+        const update = presenceUpdateSchema.safeParse(frame.data.data);
+        if (update.success) {
+          const { accountId, status } = update.data;
+          setBootstrap((current) => ({
+            ...current,
+            account:
+              current.account.id === accountId ? { ...current.account, status } : current.account,
+            channels: current.channels.map((chan) => ({
+              ...chan,
+              participants: chan.participants.map((p) =>
+                p.id === accountId ? { ...p, status } : p,
+              ),
+            })),
+          }));
+          setMessages((current) =>
+            current.map((msg) =>
+              msg.author.id === accountId ? { ...msg, author: { ...msg.author, status } } : msg,
+            ),
+          );
         }
       }
     });
