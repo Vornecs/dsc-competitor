@@ -1,10 +1,10 @@
 # Cove Product Plan
 
-> Last updated: 2026-06-29 | Cycle: 9 | Phase: 1 — Core Features | Build health: verified; PostgreSQL schema, adapter, and async repository interface implemented
+> Last updated: 2026-06-29 | Cycle: 10 | Phase: 1 — Core Features | Build health: verified; Redis coordination layer wired with graceful fallback
 >
-> Current objective: Cycle 9 made the Repository interface fully async, added an initial PostgreSQL schema (001_initial.sql) with 10 tables covering accounts, challenges, passkeys, sessions, communities, memberships, channels, roles, invites, messages, and idempotency; implemented a createPostgresRepository adapter using node-postgres; wired DATABASE_URL-driven repository selection into index.ts and preview.ts; added docker-compose.yml for local PostgreSQL 17 development.
+> Current objective: Cycle 10 wired Redis gateway coordinator for cluster-wide event sequencing and session state persistence. Redis is available via `REDIS_URL=redis://localhost:6379` from docker-compose.yml, with automatic fallback to in-memory coordinator when Redis is unavailable.
 >
-> Next gate: add an initial Redis coordination layer for gateway session state, or begin the attachment pipeline (managed messages with file uploads, quarantine, and S3-compatible storage).
+> Next gate: begin the attachment pipeline (managed messages with file uploads, quarantine, and S3-compatible storage).
 
 This file is the authoritative product, architecture, and delivery record. A behavior or scope change is incomplete until this file is reconciled in the same work cycle.
 
