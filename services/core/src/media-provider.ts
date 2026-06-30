@@ -1,11 +1,7 @@
 import type { VoiceSession } from '@cove/contracts';
 
 export interface MediaProvider {
-  createJoinToken(
-    channelId: string,
-    accountId: string,
-    displayName: string,
-  ): Promise<VoiceSession>;
+  createJoinToken(channelId: string, accountId: string, displayName: string): Promise<VoiceSession>;
 }
 
 export class FakeMediaProvider implements MediaProvider {
@@ -35,7 +31,7 @@ export class LiveKitMediaProvider implements MediaProvider {
 
     if (!key || !secret || !url) {
       throw new Error(
-        'LiveKit media provider is blocked: missing LIVEKIT_API_KEY, LIVEKIT_API_SECRET, or LIVEKIT_URL.'
+        'LiveKit media provider is blocked: missing LIVEKIT_API_KEY, LIVEKIT_API_SECRET, or LIVEKIT_URL.',
       );
     }
     this.apiKey = key;

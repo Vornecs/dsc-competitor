@@ -2423,4 +2423,3 @@ describe('voice room API', () => {
     expect(joinRes.statusCode).toBe(403);
   });
 });
-
