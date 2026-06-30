@@ -19,6 +19,8 @@ if (process.env.DATABASE_URL) {
   repo = createMemoryRepository();
 }
 
+await repo.reconcileVoiceParticipants();
+
 let coordinator: GatewayCoordinator;
 
 try {

@@ -571,7 +571,64 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
     time: new Date().toISOString(),
   }));
 
-  app.get('/v1/bootstrap', async () => currentBootstrap());
+  app.get('/v1/bootstrap', async (request, reply) => {
+    const authHeader = request.headers['authorization'];
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      const token = authHeader.substring(7);
+      const session = await repo.getSession(token);
+      if (session) {
+        const account = await repo.getAccountByEmail(session.email);
+        if (account) {
+          const communities = await repo.listCommunitiesForAccount(account.id);
+          const channels: Channel[] = [];
+          for (const community of communities) {
+            const communityChannels = await repo.getChannelsByCommunity(community.id);
+            channels.push(...communityChannels);
+          }
+
+          let activeCommunityId = '';
+          let activeChannelId = '';
+          let messages: Message[] = [];
+
+          if (communities.length > 0) {
+            activeCommunityId = communities[0]!.id;
+            const activeCommunityChannels = channels.filter(
+              (c) => c.communityId === activeCommunityId,
+            );
+            if (activeCommunityChannels.length > 0) {
+              activeChannelId = activeCommunityChannels[0]!.id;
+              messages = await repo.getMessagesByChannel(activeChannelId);
+            } else {
+              activeChannelId = 'channel-placeholder';
+            }
+          }
+
+          const bootstrapCommunities =
+            communities.length > 0 ? communities : demoBootstrap.communities;
+          const bootstrapChannels = communities.length > 0 ? channels : demoBootstrap.channels;
+
+          if (!activeCommunityId) {
+            activeCommunityId = demoBootstrap.activeCommunityId;
+          }
+          if (!activeChannelId) {
+            activeChannelId = demoBootstrap.activeChannelId;
+            messages = await repo.getMessagesByChannel(activeChannelId);
+          }
+
+          return bootstrapStateSchema.parse({
+            account,
+            communities: bootstrapCommunities,
+            activeCommunityId,
+            activeChannelId,
+            channels: bootstrapChannels,
+            messages,
+            attention: [],
+          });
+        }
+      }
+    }
+    return currentBootstrap();
+  });
 
   app.post('/v1/auth/email/send-code', async (request, reply) => {
     const parsed = emailLoginRequestSchema.safeParse(request.body);

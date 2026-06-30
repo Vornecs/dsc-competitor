@@ -1110,3 +1110,56 @@ button {
     animation-iteration-count: 1 !important;
   }
 }
+
+/* Login Modal styling */
+.login-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(4px);
+  display: grid;
+  place-items: center;
+  z-index: 1000;
+  padding: 16px;
+}
+.login-modal {
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  width: 100%;
+  max-width: 400px;
+  padding: 24px;
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.login-modal h2 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+}
+.login-modal p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 14px;
+  line-height: 1.4;
+}
+.login-modal form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.login-error {
+  color: var(--danger);
+  font-size: 13px;
+  margin: 0;
+}
+.login-success {
+  color: var(--green);
+  font-size: 13px;
+  margin: 0;
+}

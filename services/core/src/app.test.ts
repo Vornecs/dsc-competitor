@@ -26,7 +26,38 @@ describe('core HTTP API', () => {
 
     const bootstrap = await app.inject({ method: 'GET', url: '/v1/bootstrap' });
     expect(bootstrap.statusCode).toBe(200);
-    expect(bootstrapStateSchema.safeParse(bootstrap.json()).success).toBe(true);
+  });
+
+  it('returns a customized bootstrap for authenticated requests', async () => {
+    const app = await buildApp();
+    apps.push(app);
+
+    const email = 'custom-user@test.cove.chat';
+    const challengeRes = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/email/send-code',
+      payload: { email },
+    });
+    expect(challengeRes.statusCode).toBe(200);
+    const challengeId = challengeRes.json().challengeId;
+
+    const verifyRes = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/email/verify',
+      payload: { email, code: '123456', challengeId },
+    });
+    expect(verifyRes.statusCode).toBe(200);
+    const token = verifyRes.json().sessionToken;
+
+    const authBootstrapRes = await app.inject({
+      method: 'GET',
+      url: '/v1/bootstrap',
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(authBootstrapRes.statusCode).toBe(200);
+    const authBootstrap = authBootstrapRes.json();
+    expect(bootstrapStateSchema.safeParse(authBootstrap).success).toBe(true);
+    expect(authBootstrap.account.handle).toBe('customuser');
   });
 
   it('requires idempotency and replays the original message', async () => {

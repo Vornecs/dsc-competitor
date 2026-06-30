@@ -1036,6 +1036,13 @@ export function createPostgresRepository(pool: Pool): Repository {
         client.release();
       }
     },
+    async reconcileVoiceParticipants() {
+      await pool.query(`
+        UPDATE channels 
+        SET data = jsonb_set(data, '{participants}', '[]'::jsonb)
+        WHERE data->>'kind' IN ('voice', 'stage')
+      `);
+    },
   };
 }
 

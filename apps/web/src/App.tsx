@@ -29,6 +29,7 @@ import {
   Headphones,
   Inbox,
   LockKeyhole,
+  LogOut,
   Menu,
   MessageSquareText,
   Mic,
@@ -252,7 +253,85 @@ export function App() {
   const [auditLogNextCursor, setAuditLogNextCursor] = useState<string | null>(null);
   const [auditLogLoading, setAuditLogLoading] = useState(false);
   const [auditLogError, setAuditLogError] = useState<string | null>(null);
-  const sessionToken: string | null = null;
+  const [sessionToken, setSessionToken] = useState<string | null>(() => {
+    if (import.meta.env.MODE === 'test') return null;
+    return localStorage.getItem('cove_session_token');
+  });
+
+  const [showLoginModal, setShowLoginModal] = useState(false);
+  const [loginEmail, setLoginEmail] = useState('');
+  const [loginCode, setLoginCode] = useState('');
+  const [loginChallengeId, setLoginChallengeId] = useState<string | null>(null);
+  const [loginLoading, setLoginLoading] = useState(false);
+  const [loginError, setLoginError] = useState<string | null>(null);
+  const [loginSuccessMessage, setLoginSuccessMessage] = useState<string | null>(null);
+
+  function handleSignOut() {
+    localStorage.removeItem('cove_session_token');
+    setSessionToken(null);
+    setBootstrap(demoBootstrap);
+    setMessages(demoBootstrap.messages);
+    setConnection('preview');
+  }
+
+  async function handleSendCode(e: React.FormEvent) {
+    e.preventDefault();
+    if (!loginEmail.trim()) return;
+    setLoginLoading(true);
+    setLoginError(null);
+    setLoginSuccessMessage(null);
+    try {
+      const res = await fetch(`${API_BASE}/v1/auth/email/send-code`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ email: loginEmail.trim() }),
+      });
+      if (!res.ok) {
+        throw new Error('Failed to send verification code');
+      }
+      const data = await res.json();
+      setLoginChallengeId(data.challengeId);
+      setLoginSuccessMessage('Verification code sent to your email.');
+    } catch (err: any) {
+      setLoginError(err.message || 'An error occurred.');
+    } finally {
+      setLoginLoading(false);
+    }
+  }
+
+  async function handleVerifyCode(e: React.FormEvent) {
+    e.preventDefault();
+    if (!loginCode.trim() || !loginChallengeId) return;
+    setLoginLoading(true);
+    setLoginError(null);
+    try {
+      const res = await fetch(`${API_BASE}/v1/auth/email/verify`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          email: loginEmail.trim(),
+          code: loginCode.trim(),
+          challengeId: loginChallengeId,
+        }),
+      });
+      if (!res.ok) {
+        throw new Error('Verification failed. Please check the code.');
+      }
+      const data = await res.json();
+      localStorage.setItem('cove_session_token', data.sessionToken);
+      setSessionToken(data.sessionToken);
+      setShowLoginModal(false);
+      setLoginEmail('');
+      setLoginCode('');
+      setLoginChallengeId(null);
+      setLoginSuccessMessage(null);
+    } catch (err: any) {
+      setLoginError(err.message || 'An error occurred.');
+    } finally {
+      setLoginLoading(false);
+    }
+  }
+
   const endRef = useRef<HTMLDivElement>(null);
 
   const activeCommunity = bootstrap.communities.find(
@@ -278,7 +357,11 @@ export function App() {
   useEffect(() => {
     if (import.meta.env.MODE === 'test') return;
     const controller = new AbortController();
-    void fetch(`${API_BASE}/v1/bootstrap`, { signal: controller.signal })
+    const headers: Record<string, string> = {};
+    if (sessionToken) {
+      headers['authorization'] = `Bearer ${sessionToken}`;
+    }
+    void fetch(`${API_BASE}/v1/bootstrap`, { headers, signal: controller.signal })
       .then((response) => {
         if (!response.ok) throw new Error('Core service unavailable');
         return response.json();
@@ -287,14 +370,18 @@ export function App() {
         const parsed = bootstrapStateSchema.parse(data);
         setBootstrap(parsed);
         setMessages(parsed.messages);
+        setActiveChannelId(parsed.activeChannelId);
       })
       .catch(() => setConnection('preview'));
     return () => controller.abort();
-  }, []);
+  }, [sessionToken]);
 
   useEffect(() => {
     if (import.meta.env.MODE === 'test' || typeof WebSocket === 'undefined') return;
-    const socket = new WebSocket(runtimeConfig.gatewayUrl);
+    const url = sessionToken
+      ? `${runtimeConfig.gatewayUrl}?token=${encodeURIComponent(sessionToken)}`
+      : runtimeConfig.gatewayUrl;
+    const socket = new WebSocket(url);
     let heartbeat: number | undefined;
     socket.addEventListener('open', () => setConnection('connecting'));
     socket.addEventListener('message', (event) => {
@@ -398,7 +485,7 @@ export function App() {
       if (heartbeat) window.clearInterval(heartbeat);
       socket.close();
     };
-  }, []);
+  }, [sessionToken, bootstrap.account.id]);
 
   useEffect(() => {
     if (!sessionToken || !bootstrap.activeCommunityId) return;
@@ -444,9 +531,16 @@ export function App() {
     setMessages((current) => [...current, optimistic]);
 
     try {
+      const headers: Record<string, string> = {
+        'content-type': 'application/json',
+        'idempotency-key': clientNonce,
+      };
+      if (sessionToken) {
+        headers['authorization'] = `Bearer ${sessionToken}`;
+      }
       const response = await fetch(`${API_BASE}/v1/channels/${activeChannel.id}/messages`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json', 'idempotency-key': clientNonce },
+        headers,
         body: JSON.stringify({ content, clientNonce }),
       });
       if (!response.ok) throw new Error('Message rejected');
@@ -654,7 +748,7 @@ export function App() {
 
         <footer className="user-dock">
           <Avatar initials={bootstrap.account.initials} status={bootstrap.account.status} />
-          <div>
+          <div style={{ flex: 1, minWidth: 0 }}>
             <strong>{bootstrap.account.displayName}</strong>
             {activeVoiceChannelId ? (
               <span className="voice-dock-status">
@@ -665,6 +759,29 @@ export function App() {
               <span>@{bootstrap.account.handle}</span>
             )}
           </div>
+          {sessionToken ? (
+            <IconButton label="Sign out" onClick={handleSignOut}>
+              <LogOut size={17} />
+            </IconButton>
+          ) : (
+            <button
+              type="button"
+              className="user-dock-signin-btn"
+              onClick={() => setShowLoginModal(true)}
+              style={{
+                background: 'var(--accent)',
+                color: '#fff',
+                border: 0,
+                borderRadius: '4px',
+                padding: '4px 8px',
+                fontSize: '12px',
+                fontWeight: 600,
+                cursor: 'pointer',
+              }}
+            >
+              Sign In
+            </button>
+          )}
           {activeVoiceChannelId && (
             <IconButton label="Leave voice" onClick={() => leaveVoice(activeVoiceChannelId)}>
               <Volume2 size={17} />
@@ -950,6 +1067,148 @@ export function App() {
             </>
           )}
         </aside>
+      )}
+
+      {showLoginModal && (
+        <div
+          className="login-modal-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="login-title"
+        >
+          <div className="login-modal">
+            <h2 id="login-title">Sign in to Cove</h2>
+            <p>Enter your email address to receive a secure 6-digit login code.</p>
+
+            {loginError && (
+              <p className="login-error" role="alert">
+                {loginError}
+              </p>
+            )}
+            {loginSuccessMessage && (
+              <p className="login-success" role="status">
+                {loginSuccessMessage}
+              </p>
+            )}
+
+            {!loginChallengeId ? (
+              <form onSubmit={handleSendCode}>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  Email Address
+                  <input
+                    type="email"
+                    value={loginEmail}
+                    onChange={(e) => setLoginEmail(e.target.value)}
+                    placeholder="name@example.com"
+                    required
+                    disabled={loginLoading}
+                    style={{
+                      background: 'var(--surface)',
+                      border: '1px solid var(--border)',
+                      borderRadius: '6px',
+                      padding: '10px 12px',
+                      color: 'var(--text)',
+                    }}
+                  />
+                </label>
+                <div style={{ display: 'flex', gap: '8px', marginTop: '12px' }}>
+                  <button
+                    type="submit"
+                    disabled={loginLoading}
+                    style={{
+                      flex: 1,
+                      background: 'var(--accent)',
+                      color: '#fff',
+                      border: 0,
+                      borderRadius: '6px',
+                      padding: '10px',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {loginLoading ? 'Sending…' : 'Send Code'}
+                  </button>
+                  <button
+                    type="button"
+                    className="cancel-btn"
+                    onClick={() => setShowLoginModal(false)}
+                    disabled={loginLoading}
+                    style={{
+                      background: 'transparent',
+                      border: '1px solid var(--border)',
+                      borderRadius: '6px',
+                      padding: '10px',
+                      color: 'var(--text-muted)',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </form>
+            ) : (
+              <form onSubmit={handleVerifyCode}>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  Verification Code
+                  <input
+                    type="text"
+                    value={loginCode}
+                    onChange={(e) => setLoginCode(e.target.value)}
+                    placeholder="123456"
+                    maxLength={6}
+                    required
+                    disabled={loginLoading}
+                    style={{
+                      background: 'var(--surface)',
+                      border: '1px solid var(--border)',
+                      borderRadius: '6px',
+                      padding: '10px 12px',
+                      color: 'var(--text)',
+                    }}
+                  />
+                </label>
+                <div style={{ display: 'flex', gap: '8px', marginTop: '12px' }}>
+                  <button
+                    type="submit"
+                    disabled={loginLoading}
+                    style={{
+                      flex: 1,
+                      background: 'var(--accent)',
+                      color: '#fff',
+                      border: 0,
+                      borderRadius: '6px',
+                      padding: '10px',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {loginLoading ? 'Verifying…' : 'Verify Code'}
+                  </button>
+                  <button
+                    type="button"
+                    className="cancel-btn"
+                    onClick={() => {
+                      setLoginChallengeId(null);
+                      setLoginCode('');
+                      setLoginSuccessMessage(null);
+                    }}
+                    disabled={loginLoading}
+                    style={{
+                      background: 'transparent',
+                      border: '1px solid var(--border)',
+                      borderRadius: '6px',
+                      padding: '10px',
+                      color: 'var(--text-muted)',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Back
+                  </button>
+                </div>
+              </form>
+            )}
+          </div>
+        </div>
       )}
     </main>
   );

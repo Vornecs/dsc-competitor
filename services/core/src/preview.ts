@@ -18,6 +18,8 @@ if (process.env.DATABASE_URL) {
   repo = createMemoryRepository();
 }
 
+await repo.reconcileVoiceParticipants();
+
 let coordinator: GatewayCoordinator;
 if (process.env.REDIS_URL) {
   const { createRedisGatewayCoordinator } = await import('./redis-gateway-coordinator.js');
