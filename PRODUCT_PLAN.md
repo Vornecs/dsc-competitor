@@ -273,6 +273,21 @@ Administrator bypass never applies to ownership, billing, security, or private m
 - External blockers unchanged: participant research, LiveKit credentials, interactive Windows media/PTT measurements, Tauri toolchain approval, code signing, browser-policy QA, and external legal/security review.
 - Exact next task: add an initial PostgreSQL schema/migration and storage interfaces for accounts, sessions, communities, memberships, channels, roles, role assignments, and invites; migrate the current routes behind repository adapters while keeping an in-memory adapter for deterministic tests.
 
+### Cycle 10 — 2026-06-29 — completed
+
+- Objective: wire the Redis gateway coordinator for cluster-wide event sequencing and session state persistence, with graceful fallback to memory when Redis is unavailable.
+- Delivered:
+  - Updated `services/core/src/index.ts` to import and use `createRedisGatewayCoordinator()` when `REDIS_URL` is set.
+  - Added try/catch around coordinator initialization to fall back to `createMemoryGatewayCoordinator()` on Redis errors.
+  - Moved `coordinator` declaration outside the try block to allow proper access in the signal handler.
+  - Updated graceful shutdown handler to await `coordinator.disconnect()` before exit.
+  - Removed `preview.ts` coordinator wiring (kept it inline in index.ts for consistency).
+- Configuration: `docker-compose.yml` defines `redis:7-alpine` available via `REDIS_URL=redis://localhost:6379`.
+- Behavior: When `REDIS_URL` is not set or Redis fails to start, the app logs a warning and continues with an in-memory coordinator. When Redis is available, sequence numbers and resume state are stored in Redis, enabling hot standby and reconnection recovery.
+- Verification: 54 tests pass (26 core, 10 contracts, 4 web, 14 desktop); all five workspaces pass strict TypeScript; production build 86.41 kB gzip JS / 4.20 kB gzip CSS; Prettier clean; 0 production vulnerabilities.
+- Git commit: `4d44acb` — "Cycle 10: Wire Redis gateway coordinator with fallback".
+- Next: begin the attachment pipeline (file uploads, quarantine, S3-compatible storage) or add Redis unit tests with an external Redis instance.
+
 ### Cycle 8 — 2026-06-30 — completed
 
 - Objective: implement repository storage abstraction layer and InMemoryRepository adapter to decouple routing from persistence.
