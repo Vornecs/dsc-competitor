@@ -1,13 +1,24 @@
 import {
   bootstrapStateSchema,
+  attentionItemSchema,
+  communityStatsSchema,
   demoBootstrap,
   gatewayServerFrameSchema,
+  messageReactionUpdateSchema,
   messageSchema,
+  presenceUpdateSchema,
+  voiceParticipantJoinedSchema,
+  voiceParticipantLeftSchema,
+  voiceSessionSchema,
   type BootstrapState,
+  type AttentionItem,
   type Channel,
+  type CommunityStats,
   type Message,
-} from '@competitor/contracts';
-import { Avatar, IconButton, StatusPill } from '@competitor/ui';
+  type Participant,
+  type VoiceSession,
+} from '@cove/contracts';
+import { Avatar, IconButton, StatusPill } from '@cove/ui';
 import {
   Bell,
   ChevronDown,
@@ -31,11 +42,19 @@ import {
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
+import { resolveRuntimeConfig } from './runtime-config';
 
 type ConnectionState = 'connecting' | 'live' | 'preview';
 type Density = 'compact' | 'comfortable' | 'touch';
 
-const API_BASE = import.meta.env.VITE_API_URL ?? '';
+const runtimeConfig = resolveRuntimeConfig(
+  {
+    VITE_API_URL: import.meta.env.VITE_API_URL,
+    VITE_GATEWAY_URL: import.meta.env.VITE_GATEWAY_URL,
+  },
+  window.location.origin,
+);
+const API_BASE = runtimeConfig.apiBase;
 
 function timeLabel(value: string) {
   return new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(
@@ -48,6 +67,60 @@ export function reconcileSavedMessage(current: Message[], optimisticId: string, 
   return withoutOptimistic.some((item) => item.id === saved.id)
     ? withoutOptimistic
     : [...withoutOptimistic, saved];
+}
+
+export function reconcileMessageUpdate(current: Message[], updated: Message): Message[] {
+  return current.map((message) => (message.id === updated.id ? updated : message));
+}
+
+export function reconcileReactionUpdate(
+  current: Message[],
+  update: ReturnType<typeof messageReactionUpdateSchema.parse>,
+  accountId: string,
+): Message[] {
+  return current.map((message) => {
+    if (message.id !== update.messageId) return message;
+    const existing = message.reactions.find((reaction) => reaction.emoji === update.emoji);
+    const reactions = message.reactions.filter((reaction) => reaction.emoji !== update.emoji);
+    if (update.count > 0) {
+      reactions.push({
+        emoji: update.emoji,
+        count: update.count,
+        reacted: update.actorId === accountId ? update.reacted : (existing?.reacted ?? false),
+      });
+    }
+    return { ...message, reactions };
+  });
+}
+
+export function reconcileAttentionItem(
+  current: AttentionItem[],
+  incoming: AttentionItem,
+): AttentionItem[] {
+  return [incoming, ...current.filter((item) => item.id !== incoming.id)];
+}
+
+export function reconcileVoiceJoin(
+  channels: Channel[],
+  channelId: string,
+  participant: Participant,
+): Channel[] {
+  return channels.map((ch) => {
+    if (ch.id !== channelId) return ch;
+    if (ch.participants.some((p) => p.id === participant.id)) return ch;
+    return { ...ch, participants: [...ch.participants, participant] };
+  });
+}
+
+export function reconcileVoiceLeave(
+  channels: Channel[],
+  channelId: string,
+  participantId: string,
+): Channel[] {
+  return channels.map((ch) => {
+    if (ch.id !== channelId) return ch;
+    return { ...ch, participants: ch.participants.filter((p) => p.id !== participantId) };
+  });
 }
 
 function PrivacyNotice({ channel }: { channel: Channel }) {
@@ -87,6 +160,10 @@ export function App() {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [density, setDensity] = useState<Density>('comfortable');
   const [theme, setTheme] = useState<'dark' | 'light' | 'contrast'>('dark');
+  const [communityStats, setCommunityStats] = useState<CommunityStats | null>(null);
+  const [activeVoiceChannelId, setActiveVoiceChannelId] = useState<string | null>(null);
+  const [voiceSession, setVoiceSession] = useState<VoiceSession | null>(null);
+  const sessionToken: string | null = null;
   const endRef = useRef<HTMLDivElement>(null);
 
   const activeCommunity = bootstrap.communities.find(
@@ -128,10 +205,7 @@ export function App() {
 
   useEffect(() => {
     if (import.meta.env.MODE === 'test' || typeof WebSocket === 'undefined') return;
-    const base = API_BASE || window.location.origin;
-    const url = new URL('/v1/gateway', base);
-    url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
-    const socket = new WebSocket(url);
+    const socket = new WebSocket(runtimeConfig.gatewayUrl);
     let heartbeat: number | undefined;
     socket.addEventListener('open', () => setConnection('connecting'));
     socket.addEventListener('message', (event) => {
@@ -150,6 +224,84 @@ export function App() {
           current.some((item) => item.id === message.id) ? current : [...current, message],
         );
       }
+      if (
+        frame.op === 'EVENT' &&
+        (frame.data.type === 'message.updated' || frame.data.type === 'message.deleted')
+      ) {
+        const message = messageSchema.safeParse(frame.data.data);
+        if (message.success) {
+          setMessages((current) => reconcileMessageUpdate(current, message.data));
+        }
+      }
+      if (frame.op === 'EVENT' && frame.data.type === 'message.reaction.updated') {
+        const update = messageReactionUpdateSchema.safeParse(frame.data.data);
+        if (update.success) {
+          setMessages((current) =>
+            reconcileReactionUpdate(current, update.data, bootstrap.account.id),
+          );
+        }
+      }
+      if (frame.op === 'EVENT' && frame.data.type === 'attention.item.created') {
+        const item = attentionItemSchema.safeParse(frame.data.data);
+        if (item.success) {
+          setBootstrap((current) => ({
+            ...current,
+            attention: reconcileAttentionItem(current.attention, item.data),
+          }));
+        }
+      }
+      if (frame.op === 'EVENT' && frame.data.type === 'presence.updated') {
+        const update = presenceUpdateSchema.safeParse(frame.data.data);
+        if (update.success) {
+          const { accountId, status } = update.data;
+          setBootstrap((current) => ({
+            ...current,
+            account:
+              current.account.id === accountId ? { ...current.account, status } : current.account,
+            channels: current.channels.map((chan) => ({
+              ...chan,
+              participants: chan.participants.map((p) =>
+                p.id === accountId ? { ...p, status } : p,
+              ),
+            })),
+          }));
+          setMessages((current) =>
+            current.map((msg) =>
+              msg.author.id === accountId ? { ...msg, author: { ...msg.author, status } } : msg,
+            ),
+          );
+        }
+      }
+      if (frame.op === 'EVENT' && frame.data.type === 'voice.participant.joined') {
+        const event = voiceParticipantJoinedSchema.safeParse(frame.data.data);
+        if (event.success) {
+          setBootstrap((current) => ({
+            ...current,
+            channels: reconcileVoiceJoin(
+              current.channels,
+              event.data.channelId,
+              event.data.participant,
+            ),
+          }));
+        }
+      }
+      if (frame.op === 'EVENT' && frame.data.type === 'voice.participant.left') {
+        const event = voiceParticipantLeftSchema.safeParse(frame.data.data);
+        if (event.success) {
+          setBootstrap((current) => ({
+            ...current,
+            channels: reconcileVoiceLeave(
+              current.channels,
+              event.data.channelId,
+              event.data.participantId,
+            ),
+          }));
+          setActiveVoiceChannelId((current) => (current === event.data.channelId ? null : current));
+          setVoiceSession((current) =>
+            current?.participantId === event.data.participantId ? null : current,
+          );
+        }
+      }
     });
     socket.addEventListener('close', () => setConnection('preview'));
     socket.addEventListener('error', () => setConnection('preview'));
@@ -158,6 +310,23 @@ export function App() {
       socket.close();
     };
   }, []);
+
+  useEffect(() => {
+    if (!sessionToken || !bootstrap.activeCommunityId) return;
+    const controller = new AbortController();
+    void fetch(`${API_BASE}/v1/communities/${bootstrap.activeCommunityId}/stats`, {
+      headers: { authorization: `Bearer ${sessionToken}` },
+      signal: controller.signal,
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!data) return;
+        const parsed = communityStatsSchema.safeParse(data);
+        if (parsed.success) setCommunityStats(parsed.data);
+      })
+      .catch(() => {});
+    return () => controller.abort();
+  }, [sessionToken, bootstrap.activeCommunityId]);
 
   useEffect(() => {
     if (typeof endRef.current?.scrollIntoView === 'function') {
@@ -181,6 +350,7 @@ export function App() {
       createdAt: new Date().toISOString(),
       editedAt: null,
       reactions: [],
+      attachments: [],
     };
     setMessages((current) => [...current, optimistic]);
 
@@ -195,6 +365,37 @@ export function App() {
       setMessages((current) => reconcileSavedMessage(current, optimistic.id, saved));
     } catch {
       setConnection('preview');
+    }
+  }
+
+  async function joinVoice(channelId: string) {
+    if (import.meta.env.MODE === 'test') return;
+    try {
+      const headers: Record<string, string> = {};
+      if (sessionToken) headers['authorization'] = `Bearer ${sessionToken}`;
+      const response = await fetch(`${API_BASE}/v1/channels/${channelId}/voice/join`, {
+        method: 'POST',
+        headers,
+      });
+      if (!response.ok) return;
+      const session = voiceSessionSchema.parse(await response.json());
+      setVoiceSession(session);
+      setActiveVoiceChannelId(channelId);
+    } catch {}
+  }
+
+  async function leaveVoice(channelId: string) {
+    if (import.meta.env.MODE === 'test') return;
+    try {
+      const headers: Record<string, string> = {};
+      if (sessionToken) headers['authorization'] = `Bearer ${sessionToken}`;
+      await fetch(`${API_BASE}/v1/channels/${channelId}/voice/leave`, {
+        method: 'POST',
+        headers,
+      });
+    } finally {
+      setVoiceSession(null);
+      setActiveVoiceChannelId(null);
     }
   }
 
@@ -231,6 +432,11 @@ export function App() {
           <div>
             <span>Private space</span>
             <strong>{activeCommunity.name}</strong>
+            <span className="community-stats" aria-label="Community stats">
+              {communityStats
+                ? `${communityStats.memberCount} members · ${communityStats.onlineCount} online`
+                : `${activeCommunity.memberCount} members`}
+            </span>
           </div>
           <ChevronDown size={17} />
         </header>
@@ -296,8 +502,20 @@ export function App() {
           <Avatar initials={bootstrap.account.initials} status={bootstrap.account.status} />
           <div>
             <strong>{bootstrap.account.displayName}</strong>
-            <span>@{bootstrap.account.handle}</span>
+            {activeVoiceChannelId ? (
+              <span className="voice-dock-status">
+                <Volume2 size={11} />
+                {communityChannels.find((c) => c.id === activeVoiceChannelId)?.name ?? 'Voice'}
+              </span>
+            ) : (
+              <span>@{bootstrap.account.handle}</span>
+            )}
           </div>
+          {activeVoiceChannelId && (
+            <IconButton label="Leave voice" onClick={() => leaveVoice(activeVoiceChannelId)}>
+              <Volume2 size={17} />
+            </IconButton>
+          )}
           <IconButton label="Mute microphone">
             <Mic size={17} />
           </IconButton>
@@ -384,10 +602,23 @@ export function App() {
                 <h2>{activeChannel.name}</h2>
                 <p>
                   {activeChannel.participants.length
-                    ? `${activeChannel.participants.length} friends are already here.`
+                    ? `${activeChannel.participants.length} ${activeChannel.participants.length === 1 ? 'friend is' : 'friends are'} already here.`
                     : 'This room is quiet right now.'}
                 </p>
-                <button type="button">Join voice</button>
+                {activeVoiceChannelId === activeChannel.id ? (
+                  <button type="button" onClick={() => leaveVoice(activeChannel.id)}>
+                    Leave voice
+                  </button>
+                ) : (
+                  <button type="button" onClick={() => joinVoice(activeChannel.id)}>
+                    Join voice
+                  </button>
+                )}
+                {voiceSession && activeVoiceChannelId === activeChannel.id && (
+                  <small className="voice-session-info">
+                    Connected · Room: {voiceSession.roomName}
+                  </small>
+                )}
                 <small>E2EE · Device check before joining · No cloud recording</small>
               </section>
             ) : (
@@ -411,7 +642,9 @@ export function App() {
                           <time>{timeLabel(message.createdAt)}</time>
                         </header>
                       )}
-                      <p>{message.content}</p>
+                      <p>
+                        {message.availability === 'deleted' ? 'Message deleted' : message.content}
+                      </p>
                       {message.reactions.length > 0 && (
                         <div className="reactions">
                           {message.reactions.map((reaction) => (

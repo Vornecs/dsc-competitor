@@ -1,0 +1,25 @@
+{
+  "name": "@cove/desktop",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/main/main.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json && vite build --configLoader native --config vite.config.ts",
+    "harness": "npm run build && electron .",
+    "preflight": "npm run build && electron . --preflight",
+    "smoke": "npm run build && electron . --smoke",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --configLoader native --config vitest.config.ts --pool=threads --maxWorkers=1"
+  },
+  "dependencies": {
+    "uiohook-napi": "1.5.5"
+  },
+  "devDependencies": {
+    "electron": "42.5.1",
+    "electron-rebuild": "^3.2.9",
+    "typescript": "latest",
+    "vite": "latest",
+    "vitest": "latest"
+  }
+}

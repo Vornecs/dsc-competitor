@@ -1,5 +1,5 @@
 {
-  "name": "competitor",
+  "name": "cove",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -12,8 +12,8 @@
     "node": ">=24"
   },
   "scripts": {
-    "dev": "npm run build -w @competitor/contracts && npm run build -w @competitor/ui && concurrently -n core,web -c magenta,cyan \"npm run dev -w @competitor/core\" \"npm run dev -w @competitor/web\"",
-    "build": "npm run build -w @competitor/contracts && npm run build -w @competitor/ui && npm run build -w @competitor/core && npm run build -w @competitor/web",
+    "dev": "npm run build -w @cove/contracts && npm run build -w @cove/ui && concurrently -n core,web -c magenta,cyan \"npm run dev -w @cove/core\" \"npm run dev -w @cove/web\"",
+    "build": "npm run build -w @cove/contracts && npm run build -w @cove/ui && npm run build -w @cove/core && npm run build -w @cove/web",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
     "format:check": "prettier --check .",

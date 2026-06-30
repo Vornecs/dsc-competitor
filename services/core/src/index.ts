@@ -1,13 +1,54 @@
+import { createMemoryRepository } from './memory-repository.js';
 import { buildApp } from './app.js';
+import type { Repository } from './repository.js';
+import type { GatewayCoordinator } from './gateway-coordinator.js';
+import { createMemoryGatewayCoordinator } from './memory-gateway-coordinator.js';
+import { createRedisGatewayCoordinator } from './redis-gateway-coordinator.js';
+import { parseCorsAllowedOrigins, registerWebClient } from './deployment.js';
 
-const app = await buildApp();
+let repo: Repository;
+
+if (process.env.DATABASE_URL) {
+  const { default: pg } = await import('pg');
+  const { createPostgresRepository } = await import('./postgres-repository.js');
+  const { runMigrations } = await import('./migrations.js');
+  const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL, max: 20 });
+  await runMigrations(pool);
+  repo = createPostgresRepository(pool);
+} else {
+  repo = createMemoryRepository();
+}
+
+let coordinator: GatewayCoordinator;
+
+try {
+  if (process.env.REDIS_URL) {
+    coordinator = await createRedisGatewayCoordinator(process.env.REDIS_URL);
+  } else {
+    coordinator = createMemoryGatewayCoordinator();
+  }
+} catch (error) {
+  console.warn('Redis coordinator unavailable, falling back to memory coordinator');
+  coordinator = createMemoryGatewayCoordinator();
+}
+
+const app = await buildApp({
+  repo,
+  coordinator,
+  corsAllowedOrigins: parseCorsAllowedOrigins(process.env.CORS_ALLOWED_ORIGINS),
+});
+if (process.env.WEB_DIST_DIR) {
+  await registerWebClient(app, process.env.WEB_DIST_DIR);
+}
 const port = Number(process.env.PORT ?? 8790);
 const host = process.env.HOST ?? '127.0.0.1';
 
 await app.listen({ port, host });
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
-  process.on(signal, () => {
-    void app.close().finally(() => process.exit(0));
+  process.on(signal, async () => {
+    await app.close();
+    await coordinator.disconnect();
+    process.exit(0);
   });
 }

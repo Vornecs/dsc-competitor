@@ -1,5 +1,5 @@
 {
-  "name": "@competitor/web",
+  "name": "@cove/web",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -10,8 +10,8 @@
     "test": "vitest run --configLoader native --pool=threads --maxWorkers=1"
   },
   "dependencies": {
-    "@competitor/contracts": "0.0.0",
-    "@competitor/ui": "0.0.0",
+    "@cove/contracts": "0.0.0",
+    "@cove/ui": "0.0.0",
     "lucide-react": "latest",
     "react": "latest",
     "react-dom": "latest"

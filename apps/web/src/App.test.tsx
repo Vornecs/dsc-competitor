@@ -1,8 +1,16 @@
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
-import { demoBootstrap } from '@competitor/contracts';
-import { App, reconcileSavedMessage } from './App';
+import { demoBootstrap } from '@cove/contracts';
+import {
+  App,
+  reconcileAttentionItem,
+  reconcileMessageUpdate,
+  reconcileReactionUpdate,
+  reconcileSavedMessage,
+  reconcileVoiceJoin,
+  reconcileVoiceLeave,
+} from './App';
 
 describe('application shell', () => {
   it('renders the four-region community experience', () => {
@@ -36,5 +44,73 @@ describe('application shell', () => {
 
     expect(reconcileSavedMessage([optimistic], optimistic.id, saved)).toEqual([saved]);
     expect(reconcileSavedMessage([optimistic, saved], optimistic.id, saved)).toEqual([saved]);
+  });
+
+  it('reconciles edited, deleted, and reaction gateway updates', () => {
+    const original = demoBootstrap.messages[0]!;
+    const edited = { ...original, content: 'Updated', editedAt: new Date().toISOString() };
+    expect(reconcileMessageUpdate([original], edited)[0]?.content).toBe('Updated');
+
+    const reacted = reconcileReactionUpdate(
+      [{ ...original, reactions: [] }],
+      { messageId: original.id, emoji: '✓', count: 1, actorId: 'account-you', reacted: true },
+      'account-you',
+    );
+    expect(reacted[0]?.reactions).toEqual([{ emoji: '✓', count: 1, reacted: true }]);
+
+    const removed = reconcileReactionUpdate(
+      reacted,
+      { messageId: original.id, emoji: '✓', count: 0, actorId: 'account-you', reacted: false },
+      'account-you',
+    );
+    expect(removed[0]?.reactions).toEqual([]);
+  });
+
+  it('puts reply attention first without duplicating replayed events', () => {
+    const existing = demoBootstrap.attention[0]!;
+    const reply = {
+      id: 'reply-message-1',
+      kind: 'reply' as const,
+      title: 'Ren replied to you',
+      detail: 'Ready when you are.',
+      createdAt: new Date().toISOString(),
+      unread: true,
+      communityId: 'community-ember',
+      channelId: 'channel-campfire',
+      messageId: 'message-1',
+    };
+
+    expect(reconcileAttentionItem([existing], reply)).toEqual([reply, existing]);
+    expect(reconcileAttentionItem([reply, existing], reply)).toEqual([reply, existing]);
+  });
+
+  it('reconciles voice participant join and leave events', () => {
+    const channel = demoBootstrap.channels.find((c) => c.kind === 'voice')!;
+    const participant = {
+      id: 'account-newcomer',
+      displayName: 'Nova',
+      initials: 'N',
+      status: 'online' as const,
+    };
+
+    const afterJoin = reconcileVoiceJoin(demoBootstrap.channels, channel.id, participant);
+    const joined = afterJoin.find((c) => c.id === channel.id)!;
+    expect(joined.participants.some((p) => p.id === 'account-newcomer')).toBe(true);
+
+    // Idempotent: joining again does not duplicate
+    const afterJoinAgain = reconcileVoiceJoin(afterJoin, channel.id, participant);
+    expect(
+      afterJoinAgain
+        .find((c) => c.id === channel.id)!
+        .participants.filter((p) => p.id === 'account-newcomer'),
+    ).toHaveLength(1);
+
+    const afterLeave = reconcileVoiceLeave(afterJoin, channel.id, 'account-newcomer');
+    const left = afterLeave.find((c) => c.id === channel.id)!;
+    expect(left.participants.some((p) => p.id === 'account-newcomer')).toBe(false);
+
+    // Other channels are unaffected
+    const textChannel = demoBootstrap.channels.find((c) => c.kind === 'text')!;
+    expect(afterLeave.find((c) => c.id === textChannel.id)).toEqual(textChannel);
   });
 });

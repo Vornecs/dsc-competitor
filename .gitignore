@@ -12,5 +12,6 @@ Thumbs.db
 .idea/
 .vscode/
 .serena/
+.codex/
 playwright-report/
 test-results/

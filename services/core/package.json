@@ -1,5 +1,5 @@
 {
-  "name": "@competitor/core",
+  "name": "@cove/core",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -13,14 +13,17 @@
     "test": "vitest run --pool=threads --maxWorkers=1"
   },
   "dependencies": {
-    "@competitor/contracts": "0.0.0",
+    "@cove/contracts": "0.0.0",
     "@fastify/cors": "latest",
     "@fastify/helmet": "latest",
     "@fastify/websocket": "latest",
-    "fastify": "latest"
+    "fastify": "latest",
+    "pg": "latest",
+    "redis": "6.0.1"
   },
   "devDependencies": {
     "@types/node": "latest",
+    "@types/pg": "latest",
     "@types/ws": "latest",
     "tsx": "latest",
     "typescript": "latest",
