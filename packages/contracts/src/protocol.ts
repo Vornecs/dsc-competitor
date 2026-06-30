@@ -368,12 +368,20 @@ export type CreateCommunityRequest = z.infer<typeof createCommunityRequestSchema
 
 export const createChannelRequestSchema = z.object({
   name: z.string().min(1).max(80),
-  kind: z.enum(['text', 'voice']),
+  kind: z.enum(['text', 'voice', 'stage']),
   category: z.string().min(1).max(80),
   topic: z.string().max(240).optional(),
   privacy: channelPrivacyPolicySchema.optional(),
 });
 export type CreateChannelRequest = z.infer<typeof createChannelRequestSchema>;
+
+export const voiceSessionSchema = z.object({
+  token: z.string().min(1),
+  url: z.string().min(1),
+  roomName: z.string().min(1),
+  participantId: z.string().min(1),
+});
+export type VoiceSession = z.infer<typeof voiceSessionSchema>;
 
 export const rolePermissionSchema = z.object({
   permission: z.string().trim().min(1).max(64),

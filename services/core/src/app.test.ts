@@ -2218,3 +2218,209 @@ describe('operator audit log', () => {
     expect(getCommRes2.statusCode).toBe(200);
   });
 });
+
+describe('voice room API', () => {
+  async function getAuth(app: Awaited<ReturnType<typeof buildApp>>) {
+    const email = `user-${crypto.randomUUID()}@test.cove.chat`;
+    const sendRes = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/email/send-code',
+      payload: { email },
+    });
+    const { challengeId } = sendRes.json();
+    const verifyRes = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/email/verify',
+      payload: { email, code: '123456', challengeId },
+    });
+    const data = verifyRes.json();
+    return {
+      token: data.sessionToken as string,
+      account: data.account as { id: string; handle: string },
+    };
+  }
+
+  it('allows a member to join and leave a voice channel with credentials', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const { token, account } = await getAuth(app);
+
+    // Create community
+    const createCommRes = await app.inject({
+      method: 'POST',
+      url: '/v1/communities',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 'Voice Guild' },
+    });
+    const communityId = createCommRes.json().id;
+
+    // Create voice channel
+    const createChanRes = await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/channels`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 'Lobby', kind: 'voice', category: 'Voice Channels' },
+    });
+    expect(createChanRes.statusCode).toBe(201);
+    const channel = createChanRes.json();
+    expect(channel.kind).toBe('voice');
+
+    // Join voice channel
+    const joinRes = await app.inject({
+      method: 'POST',
+      url: `/v1/channels/${channel.id}/voice/join`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(joinRes.statusCode).toBe(200);
+    const session = joinRes.json();
+    expect(session.token).toContain(channel.id);
+    expect(session.roomName).toBe(`room-${channel.id}`);
+    expect(session.participantId).toBe(account.id);
+
+    // Get channel to verify participant is added
+    const listRes = await app.inject({
+      method: 'GET',
+      url: `/v1/communities/${communityId}/channels`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    const updatedChannel = listRes.json().channels.find((c: any) => c.id === channel.id);
+    expect(updatedChannel.participants.length).toBe(1);
+    expect(updatedChannel.participants[0].id).toBe(account.id);
+
+    // Leave voice channel
+    const leaveRes = await app.inject({
+      method: 'POST',
+      url: `/v1/channels/${channel.id}/voice/leave`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(leaveRes.statusCode).toBe(200);
+    expect(leaveRes.json().success).toBe(true);
+
+    // Verify participant is removed
+    const listRes2 = await app.inject({
+      method: 'GET',
+      url: `/v1/communities/${communityId}/channels`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    const leftChannel = listRes2.json().channels.find((c: any) => c.id === channel.id);
+    expect(leftChannel.participants.length).toBe(0);
+  });
+
+  it('moves user when joining a different voice channel in the same community', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const { token, account } = await getAuth(app);
+
+    const createCommRes = await app.inject({
+      method: 'POST',
+      url: '/v1/communities',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 'Voice Guild 2' },
+    });
+    const communityId = createCommRes.json().id;
+
+    // Create voice channel 1
+    const createChan1Res = await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/channels`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 'Lobby 1', kind: 'voice', category: 'Voice Channels' },
+    });
+    const channel1 = createChan1Res.json();
+
+    // Create voice channel 2
+    const createChan2Res = await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/channels`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 'Lobby 2', kind: 'voice', category: 'Voice Channels' },
+    });
+    const channel2 = createChan2Res.json();
+
+    // Join channel 1
+    await app.inject({
+      method: 'POST',
+      url: `/v1/channels/${channel1.id}/voice/join`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+
+    // Join channel 2
+    await app.inject({
+      method: 'POST',
+      url: `/v1/channels/${channel2.id}/voice/join`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+
+    // Verify user is in channel 2 but not channel 1
+    const listRes = await app.inject({
+      method: 'GET',
+      url: `/v1/communities/${communityId}/channels`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    const updatedChannel1 = listRes.json().channels.find((c: any) => c.id === channel1.id);
+    const updatedChannel2 = listRes.json().channels.find((c: any) => c.id === channel2.id);
+
+    expect(updatedChannel1.participants.length).toBe(0);
+    expect(updatedChannel2.participants.length).toBe(1);
+    expect(updatedChannel2.participants[0].id).toBe(account.id);
+  });
+
+  it('enforces permission gating for joining voice channels', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const { token: ownerToken } = await getAuth(app);
+    const { token: memberToken, account: memberAccount } = await getAuth(app);
+
+    const createCommRes = await app.inject({
+      method: 'POST',
+      url: '/v1/communities',
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { name: 'Perm Guild' },
+    });
+    const communityId = createCommRes.json().id;
+
+    // Create voice channel
+    const createChanRes = await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/channels`,
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { name: 'Quiet Room', kind: 'voice', category: 'Voice Channels' },
+    });
+    const channel = createChanRes.json();
+
+    // Member joins community
+    await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/join`,
+      headers: { authorization: `Bearer ${memberToken}` },
+    });
+
+    // Create a custom role that denies voice.join
+    const roleRes = await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/roles`,
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: {
+        name: 'No Voice',
+        permissions: [{ permission: 'voice.join', effect: 'deny' }],
+      },
+    });
+    const roleId = roleRes.json().id;
+
+    // Assign the role to the member
+    await app.inject({
+      method: 'PUT',
+      url: `/v1/communities/${communityId}/members/${memberAccount.id}/roles/${roleId}`,
+      headers: { authorization: `Bearer ${ownerToken}` },
+    });
+
+    // Verify member is denied join access
+    const joinRes = await app.inject({
+      method: 'POST',
+      url: `/v1/channels/${channel.id}/voice/join`,
+      headers: { authorization: `Bearer ${memberToken}` },
+    });
+    expect(joinRes.statusCode).toBe(403);
+  });
+});
+

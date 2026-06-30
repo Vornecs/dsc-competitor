@@ -48,6 +48,8 @@ import {
   type Role,
   type Invite,
   type Ban,
+  type Participant,
+  type VoiceSession,
 } from '@cove/contracts';
 import type { ObjectStorage } from './object-storage.js';
 import { createMemoryObjectStorage } from './object-storage.js';
@@ -57,6 +59,7 @@ import type { Membership, Repository } from './repository.js';
 import { createMemoryRepository } from './memory-repository.js';
 import type { GatewayCoordinator } from './gateway-coordinator.js';
 import { createMemoryGatewayCoordinator } from './memory-gateway-coordinator.js';
+import { type MediaProvider, FakeMediaProvider } from './media-provider.js';
 
 const account = demoBootstrap.account;
 
@@ -277,12 +280,14 @@ export interface BuildAppOptions {
   coordinator?: GatewayCoordinator;
   storage?: ObjectStorage;
   corsAllowedOrigins?: string[] | false;
+  mediaProvider?: MediaProvider;
 }
 
 export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInstance> {
   const repo = opts.repo ?? createMemoryRepository();
   const coordinator = opts.coordinator ?? createMemoryGatewayCoordinator();
   const storage = opts.storage ?? createMemoryObjectStorage();
+  const mediaProvider = opts.mediaProvider ?? new FakeMediaProvider();
   const app = Fastify({
     logger: {
       level: process.env.LOG_LEVEL ?? 'info',
@@ -1676,6 +1681,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
         { permission: 'message.send', effect: 'allow' },
         { permission: 'message.read', effect: 'allow' },
         { permission: 'message.react', effect: 'allow' },
+        { permission: 'voice.join', effect: 'allow' },
       ],
       createdAt: new Date().toISOString(),
     };
@@ -2162,6 +2168,124 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
 
       const list = await repo.getChannelsByCommunity(community.id);
       return reply.code(200).send({ channels: list });
+    },
+  );
+
+  // Voice room join/leave endpoints
+  app.post<{ Params: { channelId: string } }>(
+    '/v1/channels/:channelId/voice/join',
+    async (request, reply) => {
+      const ok = await requireAuth(request, reply);
+      if (!ok) return;
+
+      const { account: actor } = (request as any).user;
+      const channel = await findDynamicChannel(request.params.channelId);
+      if (!channel || (channel.kind !== 'voice' && channel.kind !== 'stage')) {
+        return problem(
+          reply,
+          404,
+          'Channel not found',
+          'The requested voice or stage channel does not exist.',
+          request.url,
+        );
+      }
+
+      const membership = await requireMembership(reply, channel.communityId, actor.id, request.url);
+      if (!membership) return;
+
+      const decision = await requirePermission(
+        reply,
+        channel.communityId,
+        membership,
+        actor.id,
+        'voice.join',
+        request.url,
+      );
+      if (!decision) return;
+
+      // Clean up user from any other voice/stage channel in the same community
+      const communityChannels = await repo.getChannelsByCommunity(channel.communityId);
+      for (const c of communityChannels) {
+        if ((c.kind === 'voice' || c.kind === 'stage') && c.id !== channel.id) {
+          const hasUser = c.participants.some((p) => p.id === actor.id);
+          if (hasUser) {
+            c.participants = c.participants.filter((p) => p.id !== actor.id);
+            await repo.addChannel(c);
+            hub.publish(
+              'voice.participant.left',
+              { channelId: c.id, participantId: actor.id },
+              channel.communityId,
+              actor.id,
+            );
+          }
+        }
+      }
+
+      // Add user to the target voice/stage channel participants
+      const participant: Participant = {
+        id: actor.id,
+        displayName: actor.displayName,
+        initials: actor.initials,
+        status: actor.status,
+      };
+
+      const alreadyIn = channel.participants.some((p) => p.id === actor.id);
+      if (!alreadyIn) {
+        channel.participants.push(participant);
+        await repo.addChannel(channel);
+        hub.publish(
+          'voice.participant.joined',
+          { channelId: channel.id, participant },
+          channel.communityId,
+          actor.id,
+        );
+      }
+
+      // Generate join credentials using MediaProvider
+      const mediaSession = await mediaProvider.createJoinToken(
+        channel.id,
+        actor.id,
+        actor.displayName,
+      );
+
+      return reply.code(200).send(mediaSession);
+    },
+  );
+
+  app.post<{ Params: { channelId: string } }>(
+    '/v1/channels/:channelId/voice/leave',
+    async (request, reply) => {
+      const ok = await requireAuth(request, reply);
+      if (!ok) return;
+
+      const { account: actor } = (request as any).user;
+      const channel = await findDynamicChannel(request.params.channelId);
+      if (!channel || (channel.kind !== 'voice' && channel.kind !== 'stage')) {
+        return problem(
+          reply,
+          404,
+          'Channel not found',
+          'The requested voice or stage channel does not exist.',
+          request.url,
+        );
+      }
+
+      const membership = await requireMembership(reply, channel.communityId, actor.id, request.url);
+      if (!membership) return;
+
+      const hasUser = channel.participants.some((p) => p.id === actor.id);
+      if (hasUser) {
+        channel.participants = channel.participants.filter((p) => p.id !== actor.id);
+        await repo.addChannel(channel);
+        hub.publish(
+          'voice.participant.left',
+          { channelId: channel.id, participantId: actor.id },
+          channel.communityId,
+          actor.id,
+        );
+      }
+
+      return reply.code(200).send({ success: true });
     },
   );
 

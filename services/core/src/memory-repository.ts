@@ -152,7 +152,12 @@ export function createMemoryRepository(): Repository {
     },
     async addChannel(channel) {
       const list = channelsByCommunity.get(channel.communityId) ?? [];
-      list.push(channel);
+      const idx = list.findIndex((c) => c.id === channel.id);
+      if (idx >= 0) {
+        list[idx] = channel;
+      } else {
+        list.push(channel);
+      }
       channelsByCommunity.set(channel.communityId, list);
     },
     async clearChannels(communityId) {

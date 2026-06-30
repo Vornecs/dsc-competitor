@@ -1,8 +1,8 @@
 # Cove Product Plan
 
-> Last updated: 2026-06-30 | Cycle: 18 | Phase: 1 — Core Features | Build health: verified; same-origin production web deployment and explicit endpoint policy implemented
+> Last updated: 2026-06-30 | Cycle: 19 | Phase: 1 — Core Features | Build health: verified; voice room media channels and permission-gated join/leave implemented
 >
-> Current objective: Cycle 18 delivered a production web image, typed API/gateway endpoint configuration, default-deny CORS, and shared static-client serving.
+> Current objective: Cycle 19 implemented voice-room session contracts, MediaProvider interface abstraction, fake/LiveKit media providers, join/leave endpoints, automated room-switching, and permission gating.
 >
 > Next gate: voice room media channels and desktop client integration.
 
@@ -175,13 +175,14 @@ Administrator bypass never applies to ownership, billing, security, or private m
 | P1-009 | verified    | Community member presence                          | Online/idle/do-not-disturb/offline contracts and gateway connect/disconnect fanout, with multi-session-safe offline transitions, and web client participant presence reconciliation.                                                                                                                                                                                                                                  | 80 tests pass (47 core + 13 contracts + 6 web + 14 desktop); strict typecheck; production build 87.77 kB gzip JS / 4.20 kB gzip CSS; formatting clean; 0 production vulnerabilities.                                                                                                                           |
 | P1-010 | verified    | Operator diagnostics and expanded audit log        | `auditEventSchema.action` expanded to cover membership, role, channel, and invite events; `targetType` enum covers all target categories; `recordAudit()` helper wired at 11 mutation sites; cursor-based paginated audit log endpoint; `GET /v1/communities/:id/stats` returning memberCount/channelCount/messageCount/onlineCount; `communityStatsSchema` contract; web client community header shows member count. | 86 tests pass (51 core + 15 contracts + 6 web + 14 desktop); strict typecheck; production build 87.90 kB gzip JS / 4.20 kB gzip CSS; format clean; 0 production vulnerabilities.                                                                                                                               |
 | P1-011 | verified    | Deployable web client configuration                | Same-origin production static serving; typed `VITE_API_URL`/`VITE_GATEWAY_URL` resolution; exact-origin default-deny CORS; non-root multi-stage container image; documented environment contract.                                                                                                                                                                                                                     | 94 tests pass (55 core + 15 contracts + 10 web + 14 desktop); strict typecheck; production build 88.20 kB gzip JS / 4.20 kB gzip CSS; format clean; production and full audits report 0 vulnerabilities. Container execution is blocked by the unavailable Docker Linux daemon.                                |
+| P1-012 | verified    | Voice-room media channels and permission gating   | Voice-room session schemas, stage/voice channel enum, MediaProvider interface, fake/LiveKit media providers, join/leave endpoints, automated room-switching, permission gating.                                                                                                                                                                                                                                | 97 tests pass (58 core + 15 contracts + 10 web + 14 desktop); typecheck and production build pass.                                                                                                                                                                                                             |
 
 ## Quality dashboard
 
 | Area             | Current          | Gate                                                                                                                                                                                                           |
 | ---------------- | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Install          | verified         | `npm install` completed and generated a locked workspace graph.                                                                                                                                                |
-| Unit tests       | verified         | 94 tests pass: 10 web, 55 core, 15 contracts, 14 desktop (3 gate + 11 PTT), 0 ui.                                                                                                                              |
+| Unit tests       | verified         | 97 tests pass: 10 web, 58 core, 15 contracts, 14 desktop (3 gate + 11 PTT), 0 ui.                                                                                                                              |
 | Type safety      | verified         | All five workspaces pass strict TypeScript.                                                                                                                                                                    |
 | Production build | verified         | Client output is 88.20 kB gzip JavaScript and 4.20 kB gzip CSS; multi-stage non-root container definition is present.                                                                                          |
 | API integration  | verified         | Health, bootstrap, authenticated mutations, audit reads, community stats, read state, replies, attention, gateway, device sessions, production same-origin HTML/assets, and explicit endpoint resolution pass. |
@@ -205,6 +206,19 @@ Administrator bypass never applies to ownership, billing, security, or private m
 | UI becomes unstable or decorative               | Medium      | High     | Semantic design system, visual regression, density modes, measured navigation-change policy.                                                                                                    |
 
 ## Recent session checkpoints
+
+### Cycle 19 — 2026-06-30 — completed
+
+- Objective: implement voice-room session contracts, MediaProvider interface, fake/LiveKit media providers, join/leave endpoints, automated room-switching, and permission gating.
+- Delivered: `voiceSessionSchema` and `VoiceSession` type added to `packages/contracts/src/protocol.ts`, and updated `createChannelRequestSchema` to support the `'stage'` kind.
+- Delivered: `MediaProvider` interface, `FakeMediaProvider` (deterministic mock connection details), and `LiveKitMediaProvider` (throws blocked error when API key/secret/url are missing, satisfying credential blocking requirements) in `services/core/src/media-provider.ts`.
+- Delivered: Permission-gated voice join/leave endpoints (`POST /v1/channels/:channelId/voice/join` and `POST /v1/channels/:channelId/voice/leave`) validating authentication, community membership, and `voice.join` permission.
+- Delivered: Support for switching voice channels in the same community (automatically removing a member from other voice/stage channels in that community upon joining a new one).
+- Delivered: Enhanced `InMemoryRepository`'s `addChannel` to support upsert/overwrite (matching PostgreSQL `ON CONFLICT` behavior) so channel participants list updates persist correctly.
+- Decision: D-015 defines `voice.join` as the gate permission for voice/stage channels, enables it by default on the `@everyone` role for new communities, and abstracts room provider generation via `MediaProvider`.
+- Verification: 97 tests pass (58 core + 15 contracts + 10 web + 14 desktop); all workspaces pass strict TypeScript typecheck; production build succeeds; Prettier/formatting checks pass.
+- Verification limitation: LiveKit provider verification remains blocked by the absence of credentials, which is simulated and verified by the throwing constructor.
+- Exact next task: implement the desktop client global push-to-talk (PTT) keybinding listener using `uiohook-napi` integration.
 
 ### Cycle 18 — 2026-06-30 — completed
 
