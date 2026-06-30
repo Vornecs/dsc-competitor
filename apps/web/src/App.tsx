@@ -10,6 +10,9 @@ import {
   voiceParticipantJoinedSchema,
   voiceParticipantLeftSchema,
   voiceSessionSchema,
+  screenShareStartedSchema,
+  screenShareEndedSchema,
+  stageSpeakingStateSchema,
   type AuditEvent,
   type BootstrapState,
   type AttentionItem,
@@ -18,6 +21,7 @@ import {
   type Message,
   type Participant,
   type VoiceSession,
+  type StageParticipants,
 } from '@cove/contracts';
 import { Avatar, IconButton, StatusPill } from '@cove/ui';
 import {
@@ -33,6 +37,7 @@ import {
   Menu,
   MessageSquareText,
   Mic,
+  Monitor,
   MoreHorizontal,
   PanelRightClose,
   PanelRightOpen,
@@ -230,6 +235,7 @@ function PrivacyNotice({ channel }: { channel: Channel }) {
 }
 
 function ChannelIcon({ channel }: { channel: Channel }) {
+  if (channel.kind === 'stage') return <Mic size={16} />;
   if (channel.kind === 'voice') return <Volume2 size={16} />;
   if (channel.privacy.mode === 'sealed') return <LockKeyhole size={15} />;
   return <Hash size={16} />;
@@ -257,6 +263,18 @@ export function App() {
     if (import.meta.env.MODE === 'test') return null;
     return localStorage.getItem('cove_session_token');
   });
+
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [channelScreenShares, setChannelScreenShares] = useState<
+    Record<string, { participantId: string; trackId: string }[]>
+  >({});
+  const [hoveredChannel, setHoveredChannel] = useState<{
+    id: string;
+    name: string;
+    x: number;
+    y: number;
+  } | null>(null);
+  const [peekParticipants, setPeekParticipants] = useState<StageParticipants | null>(null);
 
   const [showLoginModal, setShowLoginModal] = useState(false);
   const [loginEmail, setLoginEmail] = useState('');
@@ -332,6 +350,86 @@ export function App() {
     }
   }
 
+  async function setStageSpeaking(active: boolean) {
+    if (!activeVoiceChannelId) return;
+    const joinedChannel = bootstrap.channels.find((c) => c.id === activeVoiceChannelId);
+    if (!joinedChannel) return;
+    let stageId = '';
+    if (joinedChannel.kind === 'stage') {
+      stageId = joinedChannel.id;
+    } else if (joinedChannel.parentChannelId) {
+      const parent = bootstrap.channels.find((c) => c.id === joinedChannel.parentChannelId);
+      if (parent?.kind === 'stage') {
+        stageId = parent.id;
+      }
+    }
+    if (!stageId) return;
+
+    try {
+      const headers: Record<string, string> = {
+        'content-type': 'application/json',
+      };
+      if (sessionToken) headers['authorization'] = `Bearer ${sessionToken}`;
+      const response = await fetch(`${API_BASE}/v1/channels/${stageId}/stage/speaking`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ active }),
+      });
+      if (response.ok) {
+        setIsSpeaking(active);
+      }
+    } catch (err) {
+      console.error('Failed to update stage speaking state:', err);
+    }
+  }
+
+  async function handleMouseEnter(event: React.MouseEvent<HTMLButtonElement>, channel: Channel) {
+    if (channel.kind !== 'stage') return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    setHoveredChannel({
+      id: channel.id,
+      name: channel.name,
+      x: rect.right + 10,
+      y: rect.top,
+    });
+
+    try {
+      const headers: Record<string, string> = {};
+      if (sessionToken) headers['authorization'] = `Bearer ${sessionToken}`;
+      const response = await fetch(`${API_BASE}/v1/channels/${channel.id}/stage/peek`, { headers });
+      if (response.ok) {
+        const data = (await response.json()) as StageParticipants;
+        setChannelScreenShares((prev) => ({
+          ...prev,
+          [channel.id]: data.screenShares,
+        }));
+      }
+    } catch (err) {
+      console.error('Failed to peek stage channel:', err);
+    }
+  }
+
+  function handleMouseLeave() {
+    setHoveredChannel(null);
+  }
+
+  const computedSpeakers = useMemo(() => {
+    if (!hoveredChannel) return [];
+    const chan = bootstrap.channels.find((c) => c.id === hoveredChannel.id);
+    return chan?.participants || [];
+  }, [bootstrap.channels, hoveredChannel]);
+
+  const computedListeners = useMemo(() => {
+    if (!hoveredChannel) return [];
+    const subs = bootstrap.channels.filter((c) => c.parentChannelId === hoveredChannel.id);
+    return subs.flatMap((s) => s.participants);
+  }, [bootstrap.channels, hoveredChannel]);
+
+  const computedScreenShares = useMemo(() => {
+    if (!hoveredChannel) return [];
+    return channelScreenShares[hoveredChannel.id] || [];
+  }, [channelScreenShares, hoveredChannel]);
+
   const endRef = useRef<HTMLDivElement>(null);
 
   const activeCommunity = bootstrap.communities.find(
@@ -347,7 +445,15 @@ export function App() {
     () => [...new Set(communityChannels.map((channel) => channel.category))],
     [communityChannels],
   );
-  const activePeople = communityChannels.flatMap((channel) => channel.participants);
+  const activePeople = useMemo(() => {
+    const list = communityChannels.flatMap((channel) => channel.participants);
+    const seen = new Set<string>();
+    return list.filter((p) => {
+      if (seen.has(p.id)) return false;
+      seen.add(p.id);
+      return true;
+    });
+  }, [communityChannels]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -478,6 +584,52 @@ export function App() {
           );
         }
       }
+      if (frame.op === 'EVENT' && frame.data.type === 'stage.speaking.updated') {
+        const event = stageSpeakingStateSchema.safeParse(frame.data.data);
+        if (event.success) {
+          const { participantId, participantRole, active, mediaSession } = event.data;
+          setBootstrap((current) => ({
+            ...current,
+            channels: current.channels.map((chan) => ({
+              ...chan,
+              participants: chan.participants.map((p) =>
+                p.id === participantId ? { ...p, participantRole } : p,
+              ),
+            })),
+          }));
+          if (participantId === bootstrap.account.id) {
+            setIsSpeaking(active);
+            setVoiceSession(mediaSession);
+          }
+        }
+      }
+      if (frame.op === 'EVENT' && frame.data.type === 'screen.share.started') {
+        const event = screenShareStartedSchema.safeParse(frame.data.data);
+        if (event.success) {
+          const { channelId, participantId, trackId } = event.data;
+          setChannelScreenShares((prev) => {
+            const current = prev[channelId] || [];
+            if (current.some((s) => s.participantId === participantId)) return prev;
+            return {
+              ...prev,
+              [channelId]: [...current, { participantId, trackId }],
+            };
+          });
+        }
+      }
+      if (frame.op === 'EVENT' && frame.data.type === 'screen.share.ended') {
+        const event = screenShareEndedSchema.safeParse(frame.data.data);
+        if (event.success) {
+          const { channelId, participantId } = event.data;
+          setChannelScreenShares((prev) => {
+            const current = prev[channelId] || [];
+            return {
+              ...prev,
+              [channelId]: current.filter((s) => s.participantId !== participantId),
+            };
+          });
+        }
+      }
     });
     socket.addEventListener('close', () => setConnection('preview'));
     socket.addEventListener('error', () => setConnection('preview'));
@@ -486,6 +638,85 @@ export function App() {
       socket.close();
     };
   }, [sessionToken, bootstrap.account.id]);
+
+  // Web PTT Keybind Listener
+  useEffect(() => {
+    if (!activeVoiceChannelId) return;
+    const joinedChannel = bootstrap.channels.find((c) => c.id === activeVoiceChannelId);
+    if (!joinedChannel) return;
+    const isStageOrSub =
+      joinedChannel.kind === 'stage' ||
+      (joinedChannel.parentChannelId &&
+        bootstrap.channels.find((c) => c.id === joinedChannel.parentChannelId)?.kind === 'stage');
+    if (!isStageOrSub) return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement;
+      const isTyping =
+        target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable;
+      if (isTyping) return;
+
+      if (event.code === 'Space' || event.key === 'F9') {
+        if (event.code === 'Space') {
+          event.preventDefault();
+        }
+        if (!isSpeaking) {
+          void setStageSpeaking(true);
+        }
+      }
+    };
+
+    const handleKeyUp = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement;
+      const isTyping =
+        target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable;
+      if (isTyping) return;
+
+      if (event.code === 'Space' || event.key === 'F9') {
+        void setStageSpeaking(false);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+    };
+  }, [activeVoiceChannelId, isSpeaking, bootstrap.channels]);
+
+  // Desktop native PTT IPC listener
+  useEffect(() => {
+    const desktopGate = (window as any).desktopGate;
+    if (!desktopGate || !activeVoiceChannelId) return;
+    const joinedChannel = bootstrap.channels.find((c) => c.id === activeVoiceChannelId);
+    if (!joinedChannel) return;
+    const isStageOrSub =
+      joinedChannel.kind === 'stage' ||
+      (joinedChannel.parentChannelId &&
+        bootstrap.channels.find((c) => c.id === joinedChannel.parentChannelId)?.kind === 'stage');
+    if (!isStageOrSub) return;
+
+    let cleanupPtt: (() => void) | null = null;
+
+    desktopGate.registerPttKey(67).then((registered: boolean) => {
+      if (registered) {
+        cleanupPtt = desktopGate.onPttEvent((event: { type: 'pressed' | 'released' }) => {
+          if (event.type === 'pressed') {
+            void setStageSpeaking(true);
+          } else if (event.type === 'released') {
+            void setStageSpeaking(false);
+          }
+        });
+      }
+    });
+
+    return () => {
+      if (cleanupPtt) cleanupPtt();
+      void desktopGate.unregisterPttKey();
+    };
+  }, [activeVoiceChannelId, bootstrap.channels]);
 
   useEffect(() => {
     if (!sessionToken || !bootstrap.activeCommunityId) return;
@@ -708,7 +939,7 @@ export function App() {
                 </button>
               </header>
               {communityChannels
-                .filter((channel) => channel.category === category)
+                .filter((channel) => channel.category === category && !channel.parentChannelId)
                 .map((channel) => (
                   <div key={channel.id}>
                     <button
@@ -717,27 +948,119 @@ export function App() {
                         setActiveChannelId(channel.id);
                         setMobileNavOpen(false);
                       }}
+                      onMouseEnter={(e) => void handleMouseEnter(e, channel)}
+                      onMouseLeave={handleMouseLeave}
                       type="button"
                     >
                       <ChannelIcon channel={channel} />
                       <span>{channel.name}</span>
                       {channel.participants.length > 0 && <b>{channel.participants.length}</b>}
                     </button>
-                    {channel.kind === 'voice' && channel.participants.length > 0 && (
-                      <div className="voice-members">
-                        {channel.participants.map((person) => (
-                          <div key={person.id}>
-                            <Avatar
-                              initials={person.initials}
-                              status={person.status}
-                              size="small"
-                            />
-                            <span>{person.displayName}</span>
-                            {person.id === 'account-mara' && (
-                              <span className="speaking-bars" aria-label="Speaking" />
-                            )}
-                          </div>
-                        ))}
+                    {(channel.kind === 'voice' || channel.kind === 'stage') &&
+                      channel.participants.length > 0 && (
+                        <div className="voice-members">
+                          {channel.participants.map((person) => {
+                            const hasScreenShare = (channelScreenShares[channel.id] || []).some(
+                              (s) => s.participantId === person.id,
+                            );
+                            const isSpeaker = person.participantRole === 'speaker';
+                            return (
+                              <div key={person.id}>
+                                <Avatar
+                                  initials={person.initials}
+                                  status={person.status}
+                                  size="small"
+                                />
+                                <span>{person.displayName}</span>
+                                {isSpeaker && (
+                                  <span className="speaking-bars" aria-label="Speaking" />
+                                )}
+                                {person.participantRole && (
+                                  <span
+                                    className={`role-badge role-badge--${person.participantRole}`}
+                                    title={person.participantRole}
+                                  >
+                                    {person.participantRole === 'speaker' ? 'Speaker' : 'Listener'}
+                                  </span>
+                                )}
+                                {hasScreenShare && (
+                                  <span className="screen-share-badge" title="Sharing screen">
+                                    <Monitor size={10} style={{ marginRight: '3px' }} /> Screen
+                                  </span>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    {channel.kind === 'stage' && (
+                      <div
+                        className="subchannels-list"
+                        style={{ marginLeft: '16px', paddingLeft: '8px' }}
+                      >
+                        {communityChannels
+                          .filter((sub) => sub.parentChannelId === channel.id)
+                          .map((sub) => {
+                            const subActive = sub.id === activeChannel.id;
+                            return (
+                              <div key={sub.id} className="subchannel-container">
+                                <button
+                                  className={`channel-button channel-button--sub ${subActive ? 'is-active' : ''}`}
+                                  onClick={() => {
+                                    setActiveChannelId(sub.id);
+                                    setMobileNavOpen(false);
+                                  }}
+                                  type="button"
+                                >
+                                  <ChannelIcon channel={sub} />
+                                  <span>{sub.name}</span>
+                                  {sub.participants.length > 0 && <b>{sub.participants.length}</b>}
+                                </button>
+                                {sub.participants.length > 0 && (
+                                  <div className="voice-members" style={{ paddingLeft: '16px' }}>
+                                    {sub.participants.map((person) => {
+                                      const hasScreenShare = (
+                                        channelScreenShares[sub.id] || []
+                                      ).some((s) => s.participantId === person.id);
+                                      const isSpeaker = person.participantRole === 'speaker';
+                                      return (
+                                        <div key={person.id}>
+                                          <Avatar
+                                            initials={person.initials}
+                                            status={person.status}
+                                            size="small"
+                                          />
+                                          <span>{person.displayName}</span>
+                                          {isSpeaker && (
+                                            <span className="speaking-bars" aria-label="Speaking" />
+                                          )}
+                                          {person.participantRole && (
+                                            <span
+                                              className={`role-badge role-badge--${person.participantRole}`}
+                                              title={person.participantRole}
+                                            >
+                                              {person.participantRole === 'speaker'
+                                                ? 'Speaker'
+                                                : 'Listener'}
+                                            </span>
+                                          )}
+                                          {hasScreenShare && (
+                                            <span
+                                              className="screen-share-badge"
+                                              title="Sharing screen"
+                                            >
+                                              <Monitor size={10} style={{ marginRight: '3px' }} />{' '}
+                                              Screen
+                                            </span>
+                                          )}
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
                       </div>
                     )}
                   </div>
@@ -865,32 +1188,77 @@ export function App() {
             <span>Today</span>
           </div>
           <div className="message-list" aria-live="polite">
-            {activeChannel.kind === 'voice' ? (
+            {activeChannel.kind === 'voice' || activeChannel.kind === 'stage' ? (
               <section className="voice-focus">
                 <span className="voice-orbit">
-                  <Volume2 size={31} />
+                  {activeChannel.kind === 'stage' ? <Mic size={31} /> : <Volume2 size={31} />}
                 </span>
                 <h2>{activeChannel.name}</h2>
+                {activeChannel.kind === 'stage' && (
+                  <p className="stage-subtitle">Stage Broadcast Channel</p>
+                )}
+                {activeChannel.parentChannelId && (
+                  <p className="stage-subtitle">Stage Subchannel</p>
+                )}
                 <p>
                   {activeChannel.participants.length
                     ? `${activeChannel.participants.length} ${activeChannel.participants.length === 1 ? 'friend is' : 'friends are'} already here.`
                     : 'This room is quiet right now.'}
                 </p>
-                {activeVoiceChannelId === activeChannel.id ? (
-                  <button type="button" onClick={() => leaveVoice(activeChannel.id)}>
-                    Leave voice
-                  </button>
-                ) : (
-                  <button type="button" onClick={() => joinVoice(activeChannel.id)}>
-                    Join voice
-                  </button>
-                )}
+                <div className="voice-focus-actions">
+                  {activeVoiceChannelId === activeChannel.id ? (
+                    <button
+                      type="button"
+                      className="leave-btn"
+                      onClick={() => leaveVoice(activeChannel.id)}
+                    >
+                      Leave {activeChannel.kind === 'stage' ? 'Stage' : 'Voice'}
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="join-btn"
+                      onClick={() => joinVoice(activeChannel.id)}
+                    >
+                      Join {activeChannel.kind === 'stage' ? 'Stage' : 'Voice'}
+                    </button>
+                  )}
+                </div>
                 {voiceSession && activeVoiceChannelId === activeChannel.id && (
-                  <small className="voice-session-info">
-                    Connected · Room: {voiceSession.roomName}
-                  </small>
+                  <div className="voice-session-container">
+                    <small className="voice-session-info">
+                      Connected · Room: {voiceSession.roomName}
+                    </small>
+                    {(activeChannel.kind === 'stage' || activeChannel.parentChannelId) && (
+                      <div className="stage-ptt-controls">
+                        <button
+                          type="button"
+                          className={`ptt-speak-btn ${isSpeaking ? 'is-speaking' : ''}`}
+                          onMouseDown={() => void setStageSpeaking(true)}
+                          onMouseUp={() => void setStageSpeaking(false)}
+                          onMouseLeave={() => void setStageSpeaking(false)}
+                          onTouchStart={(e) => {
+                            e.preventDefault();
+                            void setStageSpeaking(true);
+                          }}
+                          onTouchEnd={(e) => {
+                            e.preventDefault();
+                            void setStageSpeaking(false);
+                          }}
+                        >
+                          {isSpeaking ? 'TRANSMITTING' : 'PRESS & HOLD TO SPEAK'}
+                        </button>
+                        <p className="ptt-help-text">
+                          Or press <kbd>Space</kbd> / <kbd>F9</kbd> in browser, or use Global{' '}
+                          <kbd>F9</kbd> in Desktop
+                        </p>
+                      </div>
+                    )}
+                  </div>
                 )}
-                <small>E2EE · Device check before joining · No cloud recording</small>
+                <small className="security-notice">
+                  E2EE · Device check before joining · No cloud recording
+                </small>
               </section>
             ) : (
               channelMessages.map((message, index) => {
@@ -1207,6 +1575,85 @@ export function App() {
                 </div>
               </form>
             )}
+          </div>
+        </div>
+      )}
+      {hoveredChannel && (
+        <div
+          className="stage-peek-popover"
+          style={{
+            position: 'fixed',
+            left: `${hoveredChannel.x}px`,
+            top: `${hoveredChannel.y}px`,
+            zIndex: 1000,
+          }}
+        >
+          <header className="peek-header">
+            <span className="peek-tag">Live Stage Peek</span>
+            <h3>{hoveredChannel.name}</h3>
+          </header>
+          <div className="peek-body">
+            <div className="peek-section">
+              <h4>Speakers ({computedSpeakers.length})</h4>
+              {computedSpeakers.length === 0 ? (
+                <p className="peek-empty">No speakers on stage</p>
+              ) : (
+                <div className="peek-users">
+                  {computedSpeakers.map((speaker) => {
+                    const isSharing = computedScreenShares.some(
+                      (s) => s.participantId === speaker.id,
+                    );
+                    return (
+                      <div key={speaker.id} className="peek-user-row">
+                        <Avatar size="small" initials={speaker.initials} status={speaker.status} />
+                        <span>{speaker.displayName}</span>
+                        <span className="peek-badge peek-badge--speaker" title="Speaker">
+                          <Mic size={11} />
+                        </span>
+                        {isSharing && (
+                          <span className="peek-badge peek-badge--screen" title="Sharing screen">
+                            <Monitor size={11} />
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            <div className="peek-section">
+              <h4>Listeners ({computedListeners.length})</h4>
+              {computedListeners.length === 0 ? (
+                <p className="peek-empty">No listeners</p>
+              ) : (
+                <div className="peek-users">
+                  {computedListeners.map((listener) => {
+                    const isSharing = computedScreenShares.some(
+                      (s) => s.participantId === listener.id,
+                    );
+                    return (
+                      <div key={listener.id} className="peek-user-row">
+                        <Avatar
+                          size="small"
+                          initials={listener.initials}
+                          status={listener.status}
+                        />
+                        <span>{listener.displayName}</span>
+                        <span className="peek-badge peek-badge--listener" title="Listener">
+                          <Headphones size={11} />
+                        </span>
+                        {isSharing && (
+                          <span className="peek-badge peek-badge--screen" title="Sharing screen">
+                            <Monitor size={11} />
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}

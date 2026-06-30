@@ -418,9 +418,9 @@ describe('stage and screen-share contracts', () => {
       },
     });
     expect(result.success).toBe(true);
-    expect(stageSpeakingStateSchema.safeParse({ channelId: 'stage-1', active: 'yes' }).success).toBe(
-      false,
-    );
+    expect(
+      stageSpeakingStateSchema.safeParse({ channelId: 'stage-1', active: 'yes' }).success,
+    ).toBe(false);
   });
 
   it('validates stageParticipantsSchema', () => {

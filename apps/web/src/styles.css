@@ -1163,3 +1163,219 @@ button {
   font-size: 13px;
   margin: 0;
 }
+
+/* Subchannels nested list */
+.subchannels-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 2px;
+  border-left: 1px solid var(--border-soft);
+}
+
+.channel-button--sub {
+  height: 28px !important;
+  padding-left: 16px !important;
+  font-size: 13px !important;
+}
+
+/* Role badges */
+.role-badge {
+  font-size: 9px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  margin-left: 6px;
+  text-transform: uppercase;
+  font-weight: bold;
+}
+.role-badge--speaker {
+  background: rgba(46, 204, 113, 0.15);
+  color: var(--green);
+}
+.role-badge--listener {
+  background: rgba(189, 195, 199, 0.15);
+  color: var(--text-muted);
+}
+
+/* Screen share indicator */
+.screen-share-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  margin-left: auto;
+  font-weight: 600;
+}
+
+/* Stage Peek Popover */
+.stage-peek-popover {
+  background: rgba(30, 30, 32, 0.85);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+  border-radius: 12px;
+  padding: 12px;
+  width: 240px;
+  color: var(--text);
+  pointer-events: none;
+  animation: fadeIn 0.15s ease-out;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: scale(0.95) translateX(-5px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateX(0);
+  }
+}
+
+.stage-peek-popover h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.stage-peek-popover .peek-header {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  padding-bottom: 8px;
+  margin-bottom: 10px;
+}
+
+.stage-peek-popover .peek-tag {
+  font-size: 9px;
+  text-transform: uppercase;
+  color: var(--accent);
+  font-weight: 800;
+  letter-spacing: 0.05em;
+}
+
+.peek-section {
+  margin-bottom: 10px;
+}
+
+.peek-section h4 {
+  margin: 0 0 6px 0;
+  font-size: 11px;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  font-weight: 800;
+}
+
+.peek-empty {
+  margin: 0;
+  font-size: 11px;
+  color: var(--text-faint);
+  font-style: italic;
+}
+
+.peek-users {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.peek-user-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.peek-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.peek-badge--speaker {
+  color: var(--green);
+}
+
+.peek-badge--listener {
+  color: var(--text-muted);
+}
+
+.peek-badge--screen {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.peek-loading {
+  font-size: 12px;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Stage PTT controls */
+.stage-ptt-controls {
+  margin-top: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.ptt-speak-btn {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 12px 24px;
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 0.03em;
+  cursor: pointer;
+  width: 100%;
+  transition: all 0.2s ease;
+  box-shadow: 0 4px 12px rgba(111, 140, 255, 0.2);
+}
+
+.ptt-speak-btn:hover {
+  background: var(--accent-hover, #5b79ff);
+  transform: translateY(-1px);
+}
+
+.ptt-speak-btn:active,
+.ptt-speak-btn.is-speaking {
+  background: var(--green);
+  box-shadow: 0 4px 14px rgba(46, 204, 113, 0.4);
+  transform: scale(0.98);
+}
+
+.ptt-help-text {
+  font-size: 11px;
+  color: var(--text-faint);
+  margin: 0;
+}
+
+.ptt-help-text kbd {
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 3px;
+  padding: 1px 4px;
+  font-family: monospace;
+  font-size: 10px;
+}
+
+.stage-subtitle {
+  font-size: 12px;
+  color: var(--accent);
+  font-weight: 600;
+  margin-top: -8px;
+  margin-bottom: 8px;
+}
