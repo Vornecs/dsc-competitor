@@ -3,6 +3,7 @@ import { buildApp } from './app.js';
 import type { Repository } from './repository.js';
 import type { GatewayCoordinator } from './gateway-coordinator.js';
 import { createMemoryGatewayCoordinator } from './memory-gateway-coordinator.js';
+import { createRedisGatewayCoordinator } from './redis-gateway-coordinator.js';
 
 let repo: Repository;
 
@@ -16,10 +17,15 @@ if (process.env.DATABASE_URL) {
 }
 
 let coordinator: GatewayCoordinator;
-if (process.env.REDIS_URL) {
-  const { createRedisGatewayCoordinator } = await import('./redis-gateway-coordinator.js');
-  coordinator = await createRedisGatewayCoordinator(process.env.REDIS_URL);
-} else {
+
+try {
+  if (process.env.REDIS_URL) {
+    coordinator = await createRedisGatewayCoordinator(process.env.REDIS_URL);
+  } else {
+    coordinator = createMemoryGatewayCoordinator();
+  }
+} catch (error) {
+  console.warn('Redis coordinator unavailable, falling back to memory coordinator');
   coordinator = createMemoryGatewayCoordinator();
 }
 
@@ -30,10 +36,9 @@ const host = process.env.HOST ?? '127.0.0.1';
 await app.listen({ port, host });
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
-  process.on(signal, () => {
-    void app
-      .close()
-      .finally(() => coordinator.disconnect())
-      .finally(() => process.exit(0));
+  process.on(signal, async () => {
+    await app.close();
+    await coordinator.disconnect();
+    process.exit(0);
   });
 }
