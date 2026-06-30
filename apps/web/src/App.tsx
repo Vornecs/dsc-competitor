@@ -146,6 +146,23 @@ export function reconcileAuditLog(current: AuditEvent[], incoming: AuditEvent[])
   return merged;
 }
 
+export function reconcileParticipantRole(
+  channels: Channel[],
+  channelId: string,
+  participantId: string,
+  role: 'speaker' | 'listener',
+): Channel[] {
+  return channels.map((ch) => {
+    if (ch.id !== channelId) return ch;
+    return {
+      ...ch,
+      participants: ch.participants.map((p) =>
+        p.id === participantId ? { ...p, participantRole: role } : p,
+      ),
+    };
+  });
+}
+
 function AuditLogPanel({
   events,
   loading,
@@ -593,15 +610,15 @@ export function App() {
       if (frame.op === 'EVENT' && frame.data.type === 'stage.speaking.updated') {
         const event = stageSpeakingStateSchema.safeParse(frame.data.data);
         if (event.success) {
-          const { participantId, participantRole, active, mediaSession } = event.data;
+          const { channelId, participantId, participantRole, active, mediaSession } = event.data;
           setBootstrap((current) => ({
             ...current,
-            channels: current.channels.map((chan) => ({
-              ...chan,
-              participants: chan.participants.map((p) =>
-                p.id === participantId ? { ...p, participantRole } : p,
-              ),
-            })),
+            channels: reconcileParticipantRole(
+              current.channels,
+              channelId,
+              participantId,
+              participantRole,
+            ),
           }));
           if (participantId === bootstrap.account.id) {
             setIsSpeaking(active);

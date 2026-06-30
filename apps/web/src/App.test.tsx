@@ -7,6 +7,7 @@ import {
   reconcileAttentionItem,
   reconcileAuditLog,
   reconcileMessageUpdate,
+  reconcileParticipantRole,
   reconcileReactionUpdate,
   reconcileSavedMessage,
   reconcileVoiceJoin,
@@ -146,5 +147,40 @@ describe('application shell', () => {
     // Other channels are unaffected
     const textChannel = demoBootstrap.channels.find((c) => c.kind === 'text')!;
     expect(afterLeave.find((c) => c.id === textChannel.id)).toEqual(textChannel);
+  });
+
+  it('renders the stage channel focus view with hold-to-speak control', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole('button', { name: /Main Stage/i }));
+    // Both intro (h1) and focus (h2) show channel name; at least one heading must be present
+    expect(screen.getAllByRole('heading', { name: /Main Stage/i }).length).toBeGreaterThanOrEqual(
+      1,
+    );
+    expect(screen.getByText(/PRESS & HOLD TO SPEAK|Join Stage/i)).toBeInTheDocument();
+  });
+
+  it('renders subchannels nested under their parent stage channel in the nav', () => {
+    render(<App />);
+    expect(screen.getByRole('button', { name: /Squad Alpha/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Squad Bravo/i })).toBeInTheDocument();
+  });
+
+  it('updates participant role when reconcileParticipantRole is called', () => {
+    const stageChannel = demoBootstrap.channels.find((c) => c.kind === 'stage')!;
+    const speaker = stageChannel.participants[0]!;
+
+    const asListener = reconcileParticipantRole(
+      demoBootstrap.channels,
+      stageChannel.id,
+      speaker.id,
+      'listener',
+    );
+    const updated = asListener.find((c) => c.id === stageChannel.id)!;
+    expect(updated.participants.find((p) => p.id === speaker.id)?.participantRole).toBe('listener');
+
+    // Other channels are unaffected
+    const textChannel = demoBootstrap.channels.find((c) => c.kind === 'text')!;
+    expect(asListener.find((c) => c.id === textChannel.id)).toEqual(textChannel);
   });
 });
