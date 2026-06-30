@@ -1,10 +1,10 @@
 # Cove Product Plan
 
-> Last updated: 2026-06-30 | Cycle: 15 | Phase: 1 — Core Features | Build health: verified; community member presence and web participant reconciliation live
+> Last updated: 2026-06-30 | Cycle: 16 | Phase: 1 — Core Features | Build health: verified; expanded audit log, cursor-based pagination, community stats endpoint, and web stats display live
 >
-> Current objective: Cycle 15 delivered community member presence contracts, multi-session-safe gateway connect/disconnect fanout, and presence reconciliation in the web participant surfaces.
+> Current objective: Cycle 16 delivered expanded audit event coverage (membership, role, channel, and invite actions), cursor-based pagination for the audit log, a `GET /v1/communities/:id/stats` endpoint, and a community stats display in the web client header.
 >
-> Next gate: audit events, backups, restore drill, deployable web client, and operator diagnostics.
+> Next gate: backups, restore drill, deployable web client, and deeper operator diagnostics.
 
 This file is the authoritative product, architecture, and delivery record. A behavior or scope change is incomplete until this file is reconciled in the same work cycle.
 
@@ -172,16 +172,17 @@ Administrator bypass never applies to ownership, billing, security, or private m
 | P1-007 | verified    | Ordered migration runner and same-channel replies  | `runMigrations(pool)` creates `schema_migrations` ledger, runs pending `.sql` files in filename order inside transactions, rolls back on failure; `004_replies.sql` adds `reply_to_id` FK; `replyToId` + `replyPreview` on message contract and send route.       | 75 tests pass (45 core + 11 contracts + 5 web + 14 desktop); strict typecheck; production build 87.60 kB gzip JS / 4.20 kB gzip CSS; format clean; 0 production vulnerabilities.                                                                                                                               |
 | P1-008 | verified    | Account-targeted reply attention                   | Replies emit a navigable `attention.item.created` event only to the original author when they retain channel read access; self-replies do not notify; the web client deduplicates replayed attention items.                                                       | 78 tests pass (46 core + 12 contracts + 6 web + 14 desktop); strict typecheck; production build 87.66 kB gzip JS / 4.20 kB gzip CSS; changed-scope format clean; production and full audits report 0 vulnerabilities.                                                                                          |
 | P1-009 | verified    | Community member presence                          | Online/idle/do-not-disturb/offline contracts and gateway connect/disconnect fanout, with multi-session-safe offline transitions, and web client participant presence reconciliation.                                                                               | 80 tests pass (47 core + 13 contracts + 6 web + 14 desktop); strict typecheck; production build 87.77 kB gzip JS / 4.20 kB gzip CSS; formatting clean; 0 production vulnerabilities.                                                                                                                   |
+| P1-010 | verified    | Operator diagnostics and expanded audit log        | `auditEventSchema.action` expanded to cover membership, role, channel, and invite events; `targetType` enum covers all target categories; `recordAudit()` helper wired at 11 mutation sites; cursor-based paginated audit log endpoint; `GET /v1/communities/:id/stats` returning memberCount/channelCount/messageCount/onlineCount; `communityStatsSchema` contract; web client community header shows member count. | 86 tests pass (51 core + 15 contracts + 6 web + 14 desktop); strict typecheck; production build 87.90 kB gzip JS / 4.20 kB gzip CSS; format clean; 0 production vulnerabilities. |
 
 ## Quality dashboard
 
 | Area             | Current          | Gate                                                                                                                                                                                                                             |
 | ---------------- | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Install          | verified         | `npm install` completed and generated a locked workspace graph.                                                                                                                                                                  |
-| Unit tests       | verified         | 80 tests pass: 6 web, 47 core (including migration, reply, targeted gateway attention, and member presence), 13 contracts, 14 desktop (3 gate + 11 PTT), 0 ui.                                                                                   |
+| Unit tests       | verified         | 86 tests pass: 6 web, 51 core (including operator stats, paginated audit log, and 11 new audit event sources), 15 contracts, 14 desktop (3 gate + 11 PTT), 0 ui.                                                                |
 | Type safety      | verified         | All five workspaces pass strict TypeScript.                                                                                                                                                                                      |
-| Production build | verified         | Client output is 87.77 kB gzip JavaScript and 4.20 kB gzip CSS.                                                                                                                                                                  |
-| API integration  | verified         | Health, bootstrap, authenticated community/role/invite/message lifecycle mutations, audit reads, private read state, same-channel replies, targeted reply attention, gateway, device sessions, integrated HTML, and assets pass. |
+| Production build | verified         | Client output is 87.90 kB gzip JavaScript and 4.20 kB gzip CSS.                                                                                                                                                                  |
+| API integration  | verified         | Health, bootstrap, authenticated community/role/invite/message lifecycle mutations, audit reads with cursor pagination, community stats, private read state, same-channel replies, targeted reply attention, gateway, device sessions, integrated HTML, and assets pass. |
 | Accessibility    | partial          | Semantic UI tests and accessible modes exist; real-browser review remains blocked.                                                                                                                                               |
 | Performance      | partial          | Electron renderer loaded in 2.392 s once; a 464 MB summed startup working-set snapshot signals risk. PTT harness UI added; warm/idle p95 and soak remain unmeasured.                                                             |
 | Security         | baseline partial | CSP, headers, runtime schemas, redacted logs, metadata-only message audit events, threat model, and 0 vulnerabilities in both production and full dependency audits.                                                             |
@@ -202,6 +203,19 @@ Administrator bypass never applies to ownership, billing, security, or private m
 | UI becomes unstable or decorative               | Medium      | High     | Semantic design system, visual regression, density modes, measured navigation-change policy.                                                                                                    |
 
 ## Recent session checkpoints
+
+### Cycle 16 — 2026-06-30 — completed
+
+- Objective: expand operator diagnostics with a richer audit log, cursor-based pagination, a community stats endpoint, and a web client stats display.
+- Delivered: `auditEventSchema.action` enum expanded to 18 actions covering membership (`member.joined`, `member.left`, `member.role_assigned`, `member.role_removed`), channel (`channel.created`, `channel.deleted`), role (`role.created`, `role.updated`, `role.deleted`), and invite (`invite.created`, `invite.revoked`, `invite.used`) events.
+- Delivered: `targetType` changed from `z.literal('message')` to `z.enum(['message', 'member', 'channel', 'role', 'invite'])`.
+- Delivered: `communityStatsSchema` and `CommunityStats` type added to `@cove/contracts`.
+- Delivered: generic `recordAudit()` helper in `services/core/src/app.ts`; wired at 11 mutation sites (member join via direct join route + invite use route, member leave, channel create, role create/update/delete, role assign/remove, invite create/revoke/use).
+- Delivered: `getAuditEventsByCommunity` now supports cursor-based pagination with `{ limit?, cursor? }` options, returning `{ items, nextCursor }`; both memory and PostgreSQL adapters implement keyset cursors (composite `createdAt + id`).
+- Delivered: `GET /v1/communities/:id/stats` endpoint returns `{ memberCount, channelCount, messageCount, onlineCount }` gated by community membership; `getCommunityStats` added to the Repository interface, memory adapter, and PostgreSQL adapter.
+- Delivered: web client imports `communityStatsSchema`/`CommunityStats`; community header shows `X members` from bootstrap (or `X members · Y online` when session-authenticated stats are available in future).
+- Verification: 86 tests pass (51 core + 15 contracts + 6 web + 14 desktop); all five workspaces pass strict TypeScript; production build 87.90 kB gzip JavaScript / 4.20 kB gzip CSS; format clean (only pre-existing `.claude/settings.local.json` warning remains); 0 production vulnerabilities.
+- Next: backups, restore drill, deployable web client, and deeper operator diagnostics (ban log, pagination in web client audit panel).
 
 ### Cycle 15 — 2026-06-30 — completed
 

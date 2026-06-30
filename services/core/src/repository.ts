@@ -12,6 +12,7 @@ import type {
   Channel,
   ChannelReadState,
   Community,
+  CommunityStats,
   Invite,
   Message,
   Role,
@@ -153,7 +154,13 @@ export interface Repository {
 
   // -- Audit events --------------------------------------------------------
   addAuditEvent(event: AuditEvent): Promise<void>;
-  getAuditEventsByCommunity(communityId: string): Promise<AuditEvent[]>;
+  getAuditEventsByCommunity(
+    communityId: string,
+    opts?: { limit?: number; cursor?: string },
+  ): Promise<{ items: AuditEvent[]; nextCursor: string | null }>;
+
+  // -- Community stats -------------------------------------------------------
+  getCommunityStats(communityId: string): Promise<CommunityStats>;
 
   // -- Attachments ----------------------------------------------------------
   getAttachment(id: string): Promise<AttachmentRecord | undefined>;

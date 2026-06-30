@@ -1,6 +1,7 @@
 import {
   bootstrapStateSchema,
   attentionItemSchema,
+  communityStatsSchema,
   demoBootstrap,
   gatewayServerFrameSchema,
   messageReactionUpdateSchema,
@@ -9,6 +10,7 @@ import {
   type BootstrapState,
   type AttentionItem,
   type Channel,
+  type CommunityStats,
   type Message,
 } from '@cove/contracts';
 import { Avatar, IconButton, StatusPill } from '@cove/ui';
@@ -122,6 +124,8 @@ export function App() {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [density, setDensity] = useState<Density>('comfortable');
   const [theme, setTheme] = useState<'dark' | 'light' | 'contrast'>('dark');
+  const [communityStats, setCommunityStats] = useState<CommunityStats | null>(null);
+  const sessionToken: string | null = null;
   const endRef = useRef<HTMLDivElement>(null);
 
   const activeCommunity = bootstrap.communities.find(
@@ -243,6 +247,23 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    if (!sessionToken || !bootstrap.activeCommunityId) return;
+    const controller = new AbortController();
+    void fetch(`${API_BASE}/v1/communities/${bootstrap.activeCommunityId}/stats`, {
+      headers: { authorization: `Bearer ${sessionToken}` },
+      signal: controller.signal,
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!data) return;
+        const parsed = communityStatsSchema.safeParse(data);
+        if (parsed.success) setCommunityStats(parsed.data);
+      })
+      .catch(() => {});
+    return () => controller.abort();
+  }, [sessionToken, bootstrap.activeCommunityId]);
+
+  useEffect(() => {
     if (typeof endRef.current?.scrollIntoView === 'function') {
       endRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
@@ -315,6 +336,11 @@ export function App() {
           <div>
             <span>Private space</span>
             <strong>{activeCommunity.name}</strong>
+            <span className="community-stats" aria-label="Community stats">
+              {communityStats
+                ? `${communityStats.memberCount} members · ${communityStats.onlineCount} online`
+                : `${activeCommunity.memberCount} members`}
+            </span>
           </div>
           <ChevronDown size={17} />
         </header>

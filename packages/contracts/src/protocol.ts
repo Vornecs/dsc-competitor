@@ -201,13 +201,33 @@ export const auditEventSchema = z.object({
     'message.deleted',
     'message.reaction.added',
     'message.reaction.removed',
+    'member.joined',
+    'member.left',
+    'member.role_assigned',
+    'member.role_removed',
+    'channel.created',
+    'channel.deleted',
+    'role.created',
+    'role.updated',
+    'role.deleted',
+    'invite.created',
+    'invite.revoked',
+    'invite.used',
   ]),
-  targetType: z.literal('message'),
+  targetType: z.enum(['message', 'member', 'channel', 'role', 'invite']),
   targetId: z.string().min(1),
   metadata: z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()])),
   createdAt: z.string().datetime(),
 });
 export type AuditEvent = z.infer<typeof auditEventSchema>;
+
+export const communityStatsSchema = z.object({
+  memberCount: z.number().int().nonnegative(),
+  channelCount: z.number().int().nonnegative(),
+  messageCount: z.number().int().nonnegative(),
+  onlineCount: z.number().int().nonnegative(),
+});
+export type CommunityStats = z.infer<typeof communityStatsSchema>;
 
 export const eventEnvelopeSchema = z.object({
   eventId: z.string().min(1),

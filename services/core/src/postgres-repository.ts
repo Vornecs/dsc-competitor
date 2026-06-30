@@ -12,6 +12,7 @@ import type {
   Channel,
   ChannelReadState,
   Community,
+  CommunityStats,
   Invite,
   Message,
   Role,
@@ -121,7 +122,7 @@ interface AuditEventRow extends QueryResultRow {
   community_id: string;
   actor_id: string;
   action: AuditEvent['action'];
-  target_type: 'message';
+  target_type: AuditEvent['targetType'];
   target_id: string;
   metadata: AuditEvent['metadata'];
   created_at: string;
@@ -638,22 +639,78 @@ export function createPostgresRepository(pool: Pool): Repository {
       );
     },
 
-    async getAuditEventsByCommunity(communityId) {
-      const rows = await query<AuditEventRow>(
-        `SELECT id, community_id, actor_id, action, target_type, target_id, metadata, created_at
-         FROM audit_events WHERE community_id = $1 ORDER BY created_at DESC`,
-        [communityId],
-      );
-      return rows.map((row) => ({
+    async getAuditEventsByCommunity(communityId, opts) {
+      const limit = opts?.limit ?? 50;
+      let rows: AuditEventRow[];
+      if (opts?.cursor) {
+        const { createdAt: cursorAt, id: cursorId } = JSON.parse(
+          Buffer.from(opts.cursor, 'base64url').toString('utf8'),
+        ) as { createdAt: string; id: string };
+        rows = await query<AuditEventRow>(
+          `SELECT id, community_id, actor_id, action, target_type, target_id, metadata, created_at
+           FROM audit_events
+           WHERE community_id = $1
+             AND (created_at < $2 OR (created_at = $2 AND id < $3))
+           ORDER BY created_at DESC, id DESC
+           LIMIT $4`,
+          [communityId, cursorAt, cursorId, limit],
+        );
+      } else {
+        rows = await query<AuditEventRow>(
+          `SELECT id, community_id, actor_id, action, target_type, target_id, metadata, created_at
+           FROM audit_events WHERE community_id = $1 ORDER BY created_at DESC, id DESC LIMIT $2`,
+          [communityId, limit],
+        );
+      }
+      const items = rows.map((row) => ({
         id: row.id,
         communityId: row.community_id,
         actorId: row.actor_id,
-        action: row.action,
-        targetType: row.target_type,
+        action: row.action as AuditEvent['action'],
+        targetType: row.target_type as AuditEvent['targetType'],
         targetId: row.target_id,
         metadata: row.metadata,
         createdAt: row.created_at,
       }));
+      const hasMore = rows.length === limit;
+      const nextCursor =
+        hasMore && items.length > 0
+          ? Buffer.from(
+              JSON.stringify({
+                createdAt: items[items.length - 1]!.createdAt,
+                id: items[items.length - 1]!.id,
+              }),
+              'utf8',
+            ).toString('base64url')
+          : null;
+      return { items, nextCursor };
+    },
+
+    async getCommunityStats(communityId): Promise<CommunityStats> {
+      const result = await pool.query<{
+        member_count: string;
+        channel_count: string;
+        message_count: string;
+        online_count: string;
+      }>(
+        `SELECT
+           (SELECT COUNT(*) FROM memberships WHERE community_id = $1) AS member_count,
+           (SELECT COUNT(*) FROM channels WHERE community_id = $1) AS channel_count,
+           (SELECT COUNT(*) FROM messages m
+            JOIN channels c ON m.channel_id = c.id
+            WHERE c.community_id = $1) AS message_count,
+           (SELECT COUNT(*) FROM memberships mb
+            JOIN accounts a ON (a.data->>'id') = mb.account_id
+            WHERE mb.community_id = $1 AND a.data->>'status' != 'offline') AS online_count`,
+        [communityId],
+      );
+      const row = result.rows[0]!;
+      return {
+        memberCount: parseInt(row.member_count, 10),
+        channelCount: parseInt(row.channel_count, 10),
+        messageCount: parseInt(row.message_count, 10),
+        onlineCount: parseInt(row.online_count, 10),
+      };
     },
 
     // -- Attachments --------------------------------------------------------

@@ -1427,10 +1427,9 @@ describe('managed message lifecycle', () => {
       headers: { authorization: `Bearer ${owner.token}` },
     });
     expect(ownerAudit.statusCode).toBe(200);
-    expect(ownerAudit.json().items.map((event: { action: string }) => event.action)).toEqual([
-      'message.deleted',
-      'message.edited',
-    ]);
+    const auditActions = ownerAudit.json().items.map((event: { action: string }) => event.action);
+    expect(auditActions).toContain('message.deleted');
+    expect(auditActions).toContain('message.edited');
     expect(JSON.stringify(ownerAudit.json())).not.toContain('private wording');
   });
 
@@ -1813,5 +1812,205 @@ describe('managed message lifecycle', () => {
       { accountId: user1.accountId, status: 'online' },
       { accountId: user1.accountId, status: 'offline' },
     ]);
+  });
+});
+
+describe('community stats API', () => {
+  async function getAuth(app: Awaited<ReturnType<typeof buildApp>>) {
+    const email = `user-${crypto.randomUUID()}@test.cove.chat`;
+    const sendRes = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/email/send-code',
+      payload: { email },
+    });
+    const { challengeId } = sendRes.json();
+    const verifyRes = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/email/verify',
+      payload: { email, code: '123456', challengeId },
+    });
+    const data = verifyRes.json();
+    return { token: data.sessionToken as string, account: data.account as { id: string } };
+  }
+
+  it('returns member count, channel count, message count, and online count', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const { token: ownerToken } = await getAuth(app);
+    const { token: memberToken } = await getAuth(app);
+
+    const communityRes = await app.inject({
+      method: 'POST',
+      url: '/v1/communities',
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { name: 'Stats Community' },
+    });
+    const communityId = communityRes.json().id;
+
+    await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/channels`,
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { name: 'general', kind: 'text', category: 'Chat' },
+    });
+
+    await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/invites`,
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: {},
+    });
+    const inviteList = await app.inject({
+      method: 'GET',
+      url: `/v1/communities/${communityId}/invites`,
+      headers: { authorization: `Bearer ${ownerToken}` },
+    });
+    const code = inviteList.json().invites[0].code as string;
+
+    await app.inject({
+      method: 'POST',
+      url: `/v1/invites/${code}`,
+      headers: { authorization: `Bearer ${memberToken}` },
+    });
+
+    const statsRes = await app.inject({
+      method: 'GET',
+      url: `/v1/communities/${communityId}/stats`,
+      headers: { authorization: `Bearer ${ownerToken}` },
+    });
+    expect(statsRes.statusCode).toBe(200);
+    const stats = statsRes.json();
+    expect(stats.memberCount).toBe(2);
+    expect(stats.channelCount).toBe(1);
+    expect(stats.messageCount).toBe(0);
+    expect(typeof stats.onlineCount).toBe('number');
+  });
+
+  it('rejects stats for non-members', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const { token: ownerToken } = await getAuth(app);
+    const { token: outsiderToken } = await getAuth(app);
+
+    const communityRes = await app.inject({
+      method: 'POST',
+      url: '/v1/communities',
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { name: 'Private' },
+    });
+    const communityId = communityRes.json().id;
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/v1/communities/${communityId}/stats`,
+      headers: { authorization: `Bearer ${outsiderToken}` },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+});
+
+describe('operator audit log', () => {
+  async function getAuth(app: Awaited<ReturnType<typeof buildApp>>) {
+    const email = `user-${crypto.randomUUID()}@test.cove.chat`;
+    const sendRes = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/email/send-code',
+      payload: { email },
+    });
+    const { challengeId } = sendRes.json();
+    const verifyRes = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/email/verify',
+      payload: { email, code: '123456', challengeId },
+    });
+    const data = verifyRes.json();
+    return { token: data.sessionToken as string, account: data.account as { id: string } };
+  }
+
+  it('records member.joined and channel.created audit events', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const { token: ownerToken } = await getAuth(app);
+    const { token: memberToken } = await getAuth(app);
+
+    const communityRes = await app.inject({
+      method: 'POST',
+      url: '/v1/communities',
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { name: 'Audit Community' },
+    });
+    const communityId = communityRes.json().id;
+
+    await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/channels`,
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { name: 'announce', kind: 'text', category: 'Info' },
+    });
+
+    await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/join`,
+      headers: { authorization: `Bearer ${memberToken}` },
+    });
+
+    const repo = createMemoryRepository();
+    const appWithRepo = await buildApp({ repo });
+    apps.push(appWithRepo);
+
+    const auditRes = await app.inject({
+      method: 'GET',
+      url: `/v1/communities/${communityId}/audit-events`,
+      headers: { authorization: `Bearer ${ownerToken}` },
+    });
+    expect(auditRes.statusCode).toBe(200);
+    const { items } = auditRes.json() as { items: Array<{ action: string; targetType: string }> };
+    const actions = items.map((e) => e.action);
+    expect(actions).toContain('channel.created');
+    expect(actions).toContain('member.joined');
+  });
+
+  it('paginates audit events with cursor', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const { token } = await getAuth(app);
+
+    const communityRes = await app.inject({
+      method: 'POST',
+      url: '/v1/communities',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 'Paginate Community' },
+    });
+    const communityId = communityRes.json().id;
+
+    // Create 3 channels to generate 3 audit events
+    for (const name of ['alpha', 'beta', 'gamma']) {
+      await app.inject({
+        method: 'POST',
+        url: `/v1/communities/${communityId}/channels`,
+        headers: { authorization: `Bearer ${token}` },
+        payload: { name, kind: 'text', category: 'Chat' },
+      });
+    }
+
+    const page1Res = await app.inject({
+      method: 'GET',
+      url: `/v1/communities/${communityId}/audit-events?limit=2`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(page1Res.statusCode).toBe(200);
+    const page1 = page1Res.json() as { items: unknown[]; nextCursor: string | null };
+    expect(page1.items.length).toBe(2);
+    expect(page1.nextCursor).not.toBeNull();
+
+    const page2Res = await app.inject({
+      method: 'GET',
+      url: `/v1/communities/${communityId}/audit-events?limit=2&cursor=${encodeURIComponent(page1.nextCursor!)}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(page2Res.statusCode).toBe(200);
+    const page2 = page2Res.json() as { items: unknown[]; nextCursor: string | null };
+    expect(page2.items.length).toBe(1);
+    expect(page2.nextCursor).toBeNull();
   });
 });

@@ -10,6 +10,7 @@ import type {
   Channel,
   ChannelReadState,
   Community,
+  CommunityStats,
   Invite,
   Message,
   Role,
@@ -290,10 +291,60 @@ export function createMemoryRepository(): Repository {
     async addAuditEvent(event) {
       auditEvents.push(event);
     },
-    async getAuditEventsByCommunity(communityId) {
-      return auditEvents
+    async getAuditEventsByCommunity(communityId, opts) {
+      const limit = opts?.limit ?? 50;
+      const sorted = auditEvents
         .filter((event) => event.communityId === communityId)
-        .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+        .sort((a, b) => {
+          const timeDiff = b.createdAt.localeCompare(a.createdAt);
+          return timeDiff !== 0 ? timeDiff : b.id.localeCompare(a.id);
+        });
+
+      let startIndex = 0;
+      if (opts?.cursor) {
+        const { createdAt: cursorAt, id: cursorId } = JSON.parse(
+          Buffer.from(opts.cursor, 'base64url').toString('utf8'),
+        ) as { createdAt: string; id: string };
+        const idx = sorted.findIndex((e) => e.createdAt === cursorAt && e.id === cursorId);
+        startIndex = idx >= 0 ? idx + 1 : 0;
+      }
+
+      const page = sorted.slice(startIndex, startIndex + limit);
+      const hasMore = startIndex + limit < sorted.length;
+      const nextCursor = hasMore
+        ? Buffer.from(
+            JSON.stringify({
+              createdAt: page[page.length - 1]!.createdAt,
+              id: page[page.length - 1]!.id,
+            }),
+            'utf8',
+          ).toString('base64url')
+        : null;
+
+      return { items: page, nextCursor };
+    },
+
+    // -- Community stats -------------------------------------------------------
+    async getCommunityStats(communityId): Promise<CommunityStats> {
+      const members = memberships.get(communityId) ?? [];
+      const channels = channelsByCommunity.get(communityId) ?? [];
+      const channelIds = new Set(channels.map((c) => c.id));
+      const messageCount = messages.filter((m) => channelIds.has(m.channelId)).length;
+      let onlineCount = 0;
+      for (const member of members) {
+        for (const account of accountsByEmail.values()) {
+          if (account.id === member.accountId && account.status !== 'offline') {
+            onlineCount++;
+            break;
+          }
+        }
+      }
+      return {
+        memberCount: members.length,
+        channelCount: channels.length,
+        messageCount,
+        onlineCount,
+      };
     },
 
     // -- Attachments ----------------------------------------------------------

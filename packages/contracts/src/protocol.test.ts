@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   channelPrivacyPolicySchema,
   channelSchema,
+  communityStatsSchema,
   createInviteRequestSchema,
   createRoleRequestSchema,
   auditEventSchema,
@@ -126,6 +127,66 @@ describe('managed message lifecycle contracts', () => {
         createdAt: new Date().toISOString(),
       }).success,
     ).toBe(true);
+  });
+
+  it('validates expanded audit event actions and target types', () => {
+    const memberJoin = auditEventSchema.safeParse({
+      id: 'audit-2',
+      communityId: 'community-1',
+      actorId: 'account-1',
+      action: 'member.joined',
+      targetType: 'member',
+      targetId: 'account-1',
+      metadata: {},
+      createdAt: new Date().toISOString(),
+    });
+    expect(memberJoin.success).toBe(true);
+
+    const roleCreated = auditEventSchema.safeParse({
+      id: 'audit-3',
+      communityId: 'community-1',
+      actorId: 'account-1',
+      action: 'role.created',
+      targetType: 'role',
+      targetId: 'role-1',
+      metadata: { name: 'Moderator' },
+      createdAt: new Date().toISOString(),
+    });
+    expect(roleCreated.success).toBe(true);
+
+    const unknownAction = auditEventSchema.safeParse({
+      id: 'audit-4',
+      communityId: 'community-1',
+      actorId: 'account-1',
+      action: 'unknown.action',
+      targetType: 'member',
+      targetId: 'account-1',
+      metadata: {},
+      createdAt: new Date().toISOString(),
+    });
+    expect(unknownAction.success).toBe(false);
+  });
+});
+
+describe('community stats contracts', () => {
+  it('validates community stats shape', () => {
+    expect(
+      communityStatsSchema.safeParse({
+        memberCount: 42,
+        channelCount: 5,
+        messageCount: 1200,
+        onlineCount: 7,
+      }).success,
+    ).toBe(true);
+
+    expect(
+      communityStatsSchema.safeParse({
+        memberCount: -1,
+        channelCount: 0,
+        messageCount: 0,
+        onlineCount: 0,
+      }).success,
+    ).toBe(false);
   });
 });
 

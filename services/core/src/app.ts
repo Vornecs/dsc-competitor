@@ -26,9 +26,11 @@ import {
   createInviteRequestSchema,
   permissionSimulatorRequestSchema,
   resolvePermission,
+  communityStatsSchema,
   type Attachment,
   type AttentionItem,
   type BootstrapState,
+  type CommunityStats,
   type EventEnvelope,
   type GatewayServerFrame,
   type Message,
@@ -398,6 +400,27 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
       action,
       targetType: 'message',
       targetId: messageId,
+      metadata,
+      createdAt: new Date().toISOString(),
+    });
+    await repo.addAuditEvent(event);
+  }
+
+  async function recordAudit(
+    communityId: string,
+    actorId: string,
+    action: AuditEvent['action'],
+    targetType: AuditEvent['targetType'],
+    targetId: string,
+    metadata: AuditEvent['metadata'] = {},
+  ): Promise<void> {
+    const event = auditEventSchema.parse({
+      id: `audit-${crypto.randomUUID()}`,
+      communityId,
+      actorId,
+      action,
+      targetType,
+      targetId,
       metadata,
       createdAt: new Date().toISOString(),
     });
@@ -1691,7 +1714,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
     },
   );
 
-  app.get<{ Params: { communityId: string } }>(
+  app.get<{ Params: { communityId: string }; Querystring: { limit?: string; cursor?: string } }>(
     '/v1/communities/:communityId/audit-events',
     async (request, reply) => {
       const ok = await requireAuth(request, reply);
@@ -1718,8 +1741,37 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
         request.url,
       );
       if (!decision) return;
-      const events = await repo.getAuditEventsByCommunity(community.id);
-      return reply.code(200).send({ items: events.slice(0, 100), nextCursor: null });
+      const rawLimit = parseInt((request.query as any).limit ?? '50', 10);
+      const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 100) : 50;
+      const cursor = (request.query as any).cursor as string | undefined;
+      const result = await repo.getAuditEventsByCommunity(
+        community.id,
+        cursor !== undefined ? { limit, cursor } : { limit },
+      );
+      return reply.code(200).send(result);
+    },
+  );
+
+  app.get<{ Params: { communityId: string } }>(
+    '/v1/communities/:communityId/stats',
+    async (request, reply) => {
+      const ok = await requireAuth(request, reply);
+      if (!ok) return;
+      const { account } = (request as any).user as { account: Account };
+      const community = await repo.getCommunity(request.params.communityId);
+      if (!community) {
+        return problem(
+          reply,
+          404,
+          'Community not found',
+          'The requested community does not exist.',
+          request.url,
+        );
+      }
+      const membership = await requireMembership(reply, community.id, account.id, request.url);
+      if (!membership) return;
+      const stats: CommunityStats = await repo.getCommunityStats(community.id);
+      return reply.code(200).send(communityStatsSchema.parse(stats));
     },
   );
 
@@ -1759,6 +1811,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
       });
       community.memberCount = (await repo.getMemberships(community.id)).length;
       hub.grantCommunityAccess(account.id, community.id);
+      await recordAudit(community.id, account.id, 'member.joined', 'member', account.id);
       return reply.code(204).send();
     },
   );
@@ -1822,6 +1875,9 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
 
       await repo.removeMembership(community.id, targetMemberId);
       hub.revokeCommunityAccess(targetMemberId, community.id);
+      await recordAudit(community.id, account.id, 'member.left', 'member', targetMemberId, {
+        removedBy: account.id,
+      });
       const remaining = await repo.getMemberships(community.id);
       if (remaining.length === 0) {
         await repo.clearInvites(community.id);
@@ -1897,6 +1953,10 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
       };
       await repo.addChannel(channel);
       hub.publish('channel.created', channel, community.id, account.id);
+      await recordAudit(community.id, account.id, 'channel.created', 'channel', channel.id, {
+        name: channel.name,
+        kind: channel.kind,
+      });
       return reply.code(201).send(channel);
     },
   );
@@ -1983,6 +2043,9 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
       };
       await repo.addRole(role);
       hub.publish('role.created', role, community.id, account.id);
+      await recordAudit(community.id, account.id, 'role.created', 'role', role.id, {
+        name: role.name,
+      });
       return reply.code(201).send(role);
     },
   );
@@ -2125,6 +2188,9 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
       };
       await repo.updateRole(community.id, request.params.roleId, updatedRole);
       hub.publish('role.updated', updatedRole, community.id, account.id);
+      await recordAudit(community.id, account.id, 'role.updated', 'role', updatedRole.id, {
+        name: updatedRole.name,
+      });
       return reply.code(200).send(updatedRole);
     },
   );
@@ -2183,6 +2249,9 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
         community.id,
         account.id,
       );
+      await recordAudit(community.id, account.id, 'role.deleted', 'role', role.id, {
+        name: role.name,
+      });
       return reply.code(204).send();
     },
   );
@@ -2254,6 +2323,14 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
           community.id,
           account.id,
         );
+        await recordAudit(
+          community.id,
+          account.id,
+          'member.role_assigned',
+          'member',
+          request.params.memberId,
+          { roleId: role.id, roleName: role.name },
+        );
       }
       return reply.code(204).send();
     },
@@ -2316,6 +2393,14 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
         { communityId: community.id, memberId: request.params.memberId, roleId: role.id },
         community.id,
         account.id,
+      );
+      await recordAudit(
+        community.id,
+        account.id,
+        'member.role_removed',
+        'member',
+        request.params.memberId,
+        { roleId: role.id, roleName: role.name },
       );
       return reply.code(204).send();
     },
@@ -2391,6 +2476,10 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
         community.id,
         account.id,
       );
+      await recordAudit(community.id, account.id, 'invite.created', 'invite', invite.id, {
+        expiresAt: invite.expiresAt,
+        maxUses: invite.maxUses ?? null,
+      });
       return reply.code(201).send({ invite, url });
     },
   );
@@ -2481,6 +2570,13 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
         community.id,
         account.id,
       );
+      await recordAudit(
+        community.id,
+        account.id,
+        'invite.revoked',
+        'invite',
+        request.params.inviteId,
+      );
       return reply.code(204).send();
     },
   );
@@ -2555,6 +2651,13 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
       community.id,
       account.id,
     );
+    await recordAudit(community.id, account.id, 'member.joined', 'member', account.id, {
+      inviteId: invite.id,
+    });
+    await recordAudit(community.id, account.id, 'invite.used', 'invite', invite.id, {
+      usedBy: account.id,
+      uses: invite.uses,
+    });
     return reply.code(204).send();
   });
 
