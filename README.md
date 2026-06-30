@@ -32,6 +32,22 @@ npm run preview -w @cove/core
 
 Then open `http://127.0.0.1:8790`.
 
+## Production web deployment
+
+The default deployment serves the built web client, API, and realtime gateway from one origin.
+This avoids cross-origin credentials and keeps the browser configuration minimal:
+
+```powershell
+docker build -t cove .
+docker run --rm -p 8790:8790 --env-file .env cove
+```
+
+Set `DATABASE_URL`, `REDIS_URL`, and a strong `OPERATOR_KEY` in `.env` for durable operation.
+The image sets `WEB_DIST_DIR` and `HOST=0.0.0.0`; the core process fails during startup if the
+web build is missing. For a separately hosted client, build with `VITE_API_URL` and optionally
+`VITE_GATEWAY_URL`, then set `CORS_ALLOWED_ORIGINS` to the client's exact HTTP(S) origin. Wildcard
+CORS is intentionally unsupported. See `.env.example` for the configuration contract.
+
 ## Windows desktop capability gate
 
 The shell choice remains open. Run the Electron control candidate to measure display capture, system audio, device hot-plug, shortcuts, startup, and resource use:

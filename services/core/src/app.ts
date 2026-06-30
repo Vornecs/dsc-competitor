@@ -276,6 +276,7 @@ export interface BuildAppOptions {
   repo?: Repository;
   coordinator?: GatewayCoordinator;
   storage?: ObjectStorage;
+  corsAllowedOrigins?: string[] | false;
 }
 
 export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInstance> {
@@ -527,7 +528,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
     return true;
   }
 
-  await app.register(cors, { origin: true, credentials: false });
+  await app.register(cors, { origin: opts.corsAllowedOrigins ?? false, credentials: false });
   await app.register(helmet, { contentSecurityPolicy: false });
   await app.register(websocket);
 

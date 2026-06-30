@@ -37,11 +37,19 @@ import {
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
+import { resolveRuntimeConfig } from './runtime-config';
 
 type ConnectionState = 'connecting' | 'live' | 'preview';
 type Density = 'compact' | 'comfortable' | 'touch';
 
-const API_BASE = import.meta.env.VITE_API_URL ?? '';
+const runtimeConfig = resolveRuntimeConfig(
+  {
+    VITE_API_URL: import.meta.env.VITE_API_URL,
+    VITE_GATEWAY_URL: import.meta.env.VITE_GATEWAY_URL,
+  },
+  window.location.origin,
+);
+const API_BASE = runtimeConfig.apiBase;
 
 function timeLabel(value: string) {
   return new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(
@@ -167,10 +175,7 @@ export function App() {
 
   useEffect(() => {
     if (import.meta.env.MODE === 'test' || typeof WebSocket === 'undefined') return;
-    const base = API_BASE || window.location.origin;
-    const url = new URL('/v1/gateway', base);
-    url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
-    const socket = new WebSocket(url);
+    const socket = new WebSocket(runtimeConfig.gatewayUrl);
     let heartbeat: number | undefined;
     socket.addEventListener('open', () => setConnection('connecting'));
     socket.addEventListener('message', (event) => {

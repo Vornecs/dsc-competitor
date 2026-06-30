@@ -4,6 +4,7 @@ import type { Repository } from './repository.js';
 import type { GatewayCoordinator } from './gateway-coordinator.js';
 import { createMemoryGatewayCoordinator } from './memory-gateway-coordinator.js';
 import { createRedisGatewayCoordinator } from './redis-gateway-coordinator.js';
+import { parseCorsAllowedOrigins, registerWebClient } from './deployment.js';
 
 let repo: Repository;
 
@@ -31,7 +32,14 @@ try {
   coordinator = createMemoryGatewayCoordinator();
 }
 
-const app = await buildApp({ repo, coordinator });
+const app = await buildApp({
+  repo,
+  coordinator,
+  corsAllowedOrigins: parseCorsAllowedOrigins(process.env.CORS_ALLOWED_ORIGINS),
+});
+if (process.env.WEB_DIST_DIR) {
+  await registerWebClient(app, process.env.WEB_DIST_DIR);
+}
 const port = Number(process.env.PORT ?? 8790);
 const host = process.env.HOST ?? '127.0.0.1';
 
