@@ -37,6 +37,8 @@ import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify';
 import type { WebSocket } from 'ws';
 import type { Membership, Repository } from './repository.js';
 import { createMemoryRepository } from './memory-repository.js';
+import type { GatewayCoordinator } from './gateway-coordinator.js';
+import { createMemoryGatewayCoordinator } from './memory-gateway-coordinator.js';
 
 const account = demoBootstrap.account;
 
@@ -57,39 +59,81 @@ function problem(
   return reply.type('application/problem+json').code(status).send(body);
 }
 
+interface RoutedEnvelope {
+  audience?: string[];
+  frame: string;
+}
+
 class GatewayHub {
   private readonly clients = new Map<
     WebSocket,
     { accountId?: string; communityIds: Set<string> }
   >();
-  private sequence = 0;
+  private unsubscribe?: () => Promise<void>;
 
-  constructor(private readonly publicCommunityIds: ReadonlySet<string>) {}
-
-  get currentSequence() {
-    return this.sequence;
+  constructor(
+    private readonly publicCommunityIds: ReadonlySet<string>,
+    private readonly coordinator: GatewayCoordinator,
+  ) {
+    void this.subscribe();
   }
 
-  connect(
+  private async subscribe() {
+    this.unsubscribe = await this.coordinator.subscribe((raw) => {
+      let routed: RoutedEnvelope;
+      try {
+        routed = JSON.parse(raw) as RoutedEnvelope;
+      } catch {
+        return;
+      }
+      const frame = JSON.parse(routed.frame) as { data: EventEnvelope<unknown> };
+      const { communityId, actorId } = frame.data;
+      for (const [client, access] of this.clients) {
+        if (client.readyState !== client.OPEN) continue;
+        const canAccessCommunity =
+          !communityId ||
+          this.publicCommunityIds.has(communityId) ||
+          access.communityIds.has(communityId);
+        const isInAudience =
+          !routed.audience || (access.accountId && routed.audience.includes(access.accountId));
+        if (canAccessCommunity && isInAudience) {
+          client.send(routed.frame);
+        }
+      }
+    });
+  }
+
+  async connect(
     socket: WebSocket,
     bootstrap: BootstrapState,
     accountId: string | undefined,
     communityIds: ReadonlySet<string>,
   ) {
+    const sequence = await this.coordinator.currentSequence();
     this.clients.set(socket, {
       ...(accountId ? { accountId } : {}),
       communityIds: new Set(communityIds),
     });
+    if (accountId) {
+      await this.coordinator.setResumeState(accountId, {
+        sequence,
+        communityIds: Array.from(communityIds),
+        updatedAt: new Date().toISOString(),
+      });
+    }
     const frame: GatewayServerFrame = {
       op: 'READY',
       data: {
-        sequence: this.sequence,
-        resumeToken: `local-${this.sequence}`,
+        sequence,
+        resumeToken: `local-${sequence}`,
         bootstrap,
       },
     };
     socket.send(JSON.stringify(frame));
-    socket.on('close', () => this.clients.delete(socket));
+    socket.on('close', () => {
+      this.clients.delete(socket);
+      if (accountId) void this.coordinator.deleteResumeState(accountId);
+    });
   }
 
   grantCommunityAccess(accountId: string, communityId: string) {
@@ -104,25 +148,26 @@ class GatewayHub {
     }
   }
 
-  heartbeat(socket: WebSocket) {
+  async heartbeat(socket: WebSocket) {
+    const sequence = await this.coordinator.currentSequence();
     const frame: GatewayServerFrame = {
       op: 'HEARTBEAT_ACK',
-      data: { at: new Date().toISOString(), sequence: this.sequence },
+      data: { at: new Date().toISOString(), sequence },
     };
     socket.send(JSON.stringify(frame));
   }
 
-  publish<T>(
+  async publish<T>(
     type: string,
     data: T,
     communityId?: string,
     actorId?: string,
     audience?: ReadonlySet<string>,
   ) {
-    this.sequence += 1;
+    const sequence = await this.coordinator.nextSequence();
     const envelope: EventEnvelope<T> = {
       eventId: crypto.randomUUID(),
-      sequence: this.sequence,
+      sequence,
       type,
       occurredAt: new Date().toISOString(),
       ...(communityId ? { communityId } : {}),
@@ -130,27 +175,29 @@ class GatewayHub {
       data,
     };
     const frame: GatewayServerFrame = { op: 'EVENT', data: envelope };
-    const serialized = JSON.stringify(frame);
-    for (const [client, access] of this.clients) {
-      const canAccessCommunity =
-        !communityId ||
-        this.publicCommunityIds.has(communityId) ||
-        access.communityIds.has(communityId);
-      const isInAudience = !audience || (access.accountId && audience.has(access.accountId));
-      if (client.readyState === client.OPEN && canAccessCommunity && isInAudience) {
-        client.send(serialized);
-      }
-    }
+    const routed: RoutedEnvelope = {
+      ...(audience ? { audience: Array.from(audience) } : {}),
+      frame: JSON.stringify(frame),
+    };
+    await this.coordinator.publish(JSON.stringify(routed));
     return envelope;
+  }
+
+  async disconnect() {
+    if (this.unsubscribe) {
+      await this.unsubscribe();
+    }
   }
 }
 
 export interface BuildAppOptions {
   repo?: Repository;
+  coordinator?: GatewayCoordinator;
 }
 
 export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInstance> {
   const repo = opts.repo ?? createMemoryRepository();
+  const coordinator = opts.coordinator ?? createMemoryGatewayCoordinator();
   const app = Fastify({
     logger: {
       level: process.env.LOG_LEVEL ?? 'info',
@@ -160,7 +207,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
   });
   const demoCommunityIds = new Set(demoBootstrap.communities.map((community) => community.id));
   const demoChannelIds = new Set(demoBootstrap.channels.map((channel) => channel.id));
-  const hub = new GatewayHub(demoCommunityIds);
+  const hub = new GatewayHub(demoCommunityIds, coordinator);
 
   // Seed demo messages into repository
   for (const msg of structuredClone(demoBootstrap.messages)) {
@@ -1757,8 +1804,8 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
         accessibleCommunityIds.add(community.id);
       }
     }
-    hub.connect(socket, await currentBootstrap(), gatewayAccount?.id, accessibleCommunityIds);
-    socket.on('message', (raw) => {
+    await hub.connect(socket, await currentBootstrap(), gatewayAccount?.id, accessibleCommunityIds);
+    socket.on('message', async (raw) => {
       let decoded: unknown;
       try {
         decoded = JSON.parse(raw.toString());
@@ -1771,8 +1818,12 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
         socket.close(1008, 'Unsupported gateway frame');
         return;
       }
-      if (frame.data.op === 'HEARTBEAT') hub.heartbeat(socket);
+      if (frame.data.op === 'HEARTBEAT') await hub.heartbeat(socket);
     });
+  });
+
+  app.addHook('onClose', async () => {
+    await hub.disconnect();
   });
 
   app.setNotFoundHandler((request, reply) =>
