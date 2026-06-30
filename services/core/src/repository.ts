@@ -9,6 +9,7 @@
 import type {
   Account,
   AuditEvent,
+  Ban,
   Channel,
   ChannelReadState,
   Community,
@@ -77,6 +78,7 @@ export interface MessageReactionRecord {
 export interface Repository {
   // -- Accounts -------------------------------------------------------------
   getAccountByEmail(email: string): Promise<Account | undefined>;
+  getAccountById(id: string): Promise<Account | undefined>;
   setAccount(email: string, account: Account): Promise<void>;
 
   // -- Email challenges -----------------------------------------------------
@@ -172,4 +174,14 @@ export interface Repository {
   ): Promise<void>;
   getAttachmentsByIds(ids: string[]): Promise<AttachmentRecord[]>;
   deleteAttachment(id: string): Promise<void>;
+
+  // -- Bans -----------------------------------------------------------------
+  getBansByCommunity(communityId: string): Promise<Ban[]>;
+  getBan(communityId: string, accountId: string): Promise<Ban | undefined>;
+  addBan(ban: Ban): Promise<void>;
+  removeBan(communityId: string, accountId: string): Promise<void>;
+
+  // -- Backup & Restore -----------------------------------------------------
+  exportBackup(): Promise<string>;
+  importBackup(backupJson: string): Promise<void>;
 }

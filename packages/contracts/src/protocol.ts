@@ -205,6 +205,8 @@ export const auditEventSchema = z.object({
     'member.left',
     'member.role_assigned',
     'member.role_removed',
+    'member.banned',
+    'member.unbanned',
     'channel.created',
     'channel.deleted',
     'role.created',
@@ -500,3 +502,18 @@ export interface ProblemDetail {
   detail: string;
   instance?: string;
 }
+
+export const banSchema = z.object({
+  communityId: z.string().min(1),
+  accountId: z.string().min(1),
+  reason: z.string().max(512).optional(),
+  actorId: z.string().min(1),
+  createdAt: z.string().datetime(),
+});
+export type Ban = z.infer<typeof banSchema>;
+
+export const banMemberRequestSchema = z.object({
+  accountId: z.string().min(1),
+  reason: z.string().max(512).optional(),
+});
+export type BanMemberRequest = z.infer<typeof banMemberRequestSchema>;

@@ -9,6 +9,7 @@
 import type {
   Account,
   AuditEvent,
+  Ban,
   Channel,
   ChannelReadState,
   Community,
@@ -162,6 +163,11 @@ export function createPostgresRepository(pool: Pool): Repository {
 
     getAccountByEmail(email) {
       return queryOne<AccountRow>('SELECT data FROM accounts WHERE email = $1', [email]).then(
+        (row) => row?.data,
+      );
+    },
+    getAccountById(id) {
+      return queryOne<AccountRow>("SELECT data FROM accounts WHERE data->>'id' = $1", [id]).then(
         (row) => row?.data,
       );
     },
@@ -762,6 +768,273 @@ export function createPostgresRepository(pool: Pool): Repository {
 
     async deleteAttachment(id) {
       await pool.query('DELETE FROM attachments WHERE id = $1', [id]);
+    },
+
+    // -- Bans -----------------------------------------------------------------
+    async getBansByCommunity(communityId) {
+      const { rows } = await pool.query(
+        'SELECT community_id, account_id, reason, actor_id, created_at FROM bans WHERE community_id = $1',
+        [communityId],
+      );
+      return rows.map((r) => ({
+        communityId: r.community_id,
+        accountId: r.account_id,
+        reason: r.reason ?? undefined,
+        actorId: r.actor_id,
+        createdAt: r.created_at instanceof Date ? r.created_at.toISOString() : r.created_at,
+      }));
+    },
+    async getBan(communityId, accountId) {
+      const { rows } = await pool.query(
+        'SELECT community_id, account_id, reason, actor_id, created_at FROM bans WHERE community_id = $1 AND account_id = $2',
+        [communityId, accountId],
+      );
+      if (rows.length === 0) return undefined;
+      const r = rows[0];
+      return {
+        communityId: r.community_id,
+        accountId: r.account_id,
+        reason: r.reason ?? undefined,
+        actorId: r.actor_id,
+        createdAt: r.created_at instanceof Date ? r.created_at.toISOString() : r.created_at,
+      };
+    },
+    async addBan(ban) {
+      await pool.query(
+        `INSERT INTO bans (community_id, account_id, reason, actor_id, created_at)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (community_id, account_id) DO UPDATE
+         SET reason = $3, actor_id = $4, created_at = $5`,
+        [ban.communityId, ban.accountId, ban.reason ?? null, ban.actorId, ban.createdAt],
+      );
+    },
+    async removeBan(communityId, accountId) {
+      await pool.query('DELETE FROM bans WHERE community_id = $1 AND account_id = $2', [
+        communityId,
+        accountId,
+      ]);
+    },
+
+    // -- Backup & Restore -----------------------------------------------------
+    async exportBackup() {
+      const getRows = async (table: string): Promise<any[]> => {
+        const { rows } = await pool.query(`SELECT * FROM ${table}`);
+        return rows;
+      };
+
+      const data = {
+        accounts: await getRows('accounts'),
+        emailChallenges: await getRows('email_challenges'),
+        passkeys: await getRows('passkeys'),
+        sessions: await getRows('sessions'),
+        communities: await getRows('communities'),
+        memberships: await getRows('memberships'),
+        channels: await getRows('channels'),
+        roles: await getRows('roles'),
+        invites: await getRows('invites'),
+        messages: await getRows('messages'),
+        idempotency: await getRows('idempotency'),
+        attachments: await getRows('attachments'),
+        messageReactions: await getRows('message_reactions'),
+        channelReadStates: await getRows('channel_read_states'),
+        auditEvents: await getRows('audit_events'),
+        bans: await getRows('bans'),
+      };
+      return JSON.stringify(data);
+    },
+    async importBackup(backupJson) {
+      const data = JSON.parse(backupJson);
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+
+        await client.query(`
+          TRUNCATE TABLE 
+            accounts, email_challenges, passkeys, sessions, communities, 
+            memberships, channels, roles, invites, messages, idempotency, 
+            attachments, message_reactions, channel_read_states, audit_events, bans 
+          CASCADE
+        `);
+
+        for (const row of data.accounts || []) {
+          await client.query('INSERT INTO accounts (email, data, created_at) VALUES ($1, $2, $3)', [
+            row.email,
+            typeof row.data === 'string' ? row.data : JSON.stringify(row.data),
+            row.created_at,
+          ]);
+        }
+        for (const row of data.emailChallenges || []) {
+          await client.query(
+            'INSERT INTO email_challenges (key, code, challenge_id, expires_at, created_at) VALUES ($1, $2, $3, $4, $5)',
+            [row.key, row.code, row.challenge_id, row.expires_at, row.created_at],
+          );
+        }
+        for (const row of data.passkeys || []) {
+          await client.query(
+            'INSERT INTO passkeys (id, email, credential_id, raw_id, attestation_object, client_data_json, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7)',
+            [
+              row.id,
+              row.email,
+              row.credential_id,
+              row.raw_id,
+              row.attestation_object,
+              row.client_data_json,
+              row.created_at,
+            ],
+          );
+        }
+        if ((data.passkeys || []).length > 0) {
+          await client.query(
+            "SELECT setval(pg_get_serial_sequence('passkeys', 'id'), coalesce(max(id), 1)) FROM passkeys",
+          );
+        }
+        for (const row of data.sessions || []) {
+          await client.query(
+            'INSERT INTO sessions (token, email, device_name, ip_address, last_active_at, registration_challenge, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7)',
+            [
+              row.token,
+              row.email,
+              row.device_name,
+              row.ip_address,
+              row.last_active_at,
+              row.registration_challenge,
+              row.created_at,
+            ],
+          );
+        }
+        for (const row of data.communities || []) {
+          await client.query('INSERT INTO communities (id, data, created_at) VALUES ($1, $2, $3)', [
+            row.id,
+            typeof row.data === 'string' ? row.data : JSON.stringify(row.data),
+            row.created_at,
+          ]);
+        }
+        for (const row of data.memberships || []) {
+          await client.query(
+            'INSERT INTO memberships (community_id, account_id, role, role_ids) VALUES ($1, $2, $3, $4)',
+            [
+              row.community_id,
+              row.account_id,
+              row.role,
+              typeof row.role_ids === 'string' ? row.role_ids : JSON.stringify(row.role_ids),
+            ],
+          );
+        }
+        for (const row of data.channels || []) {
+          await client.query(
+            'INSERT INTO channels (id, community_id, data, created_at) VALUES ($1, $2, $3)',
+            [
+              row.id,
+              row.community_id,
+              typeof row.data === 'string' ? row.data : JSON.stringify(row.data),
+              row.created_at,
+            ],
+          );
+        }
+        for (const row of data.roles || []) {
+          await client.query(
+            'INSERT INTO roles (id, community_id, data, created_at) VALUES ($1, $2, $3)',
+            [
+              row.id,
+              row.community_id,
+              typeof row.data === 'string' ? row.data : JSON.stringify(row.data),
+              row.created_at,
+            ],
+          );
+        }
+        for (const row of data.invites || []) {
+          await client.query(
+            'INSERT INTO invites (id, community_id, code, data, created_at) VALUES ($1, $2, $3, $4)',
+            [
+              row.id,
+              row.community_id,
+              row.code,
+              typeof row.data === 'string' ? row.data : JSON.stringify(row.data),
+              row.created_at,
+            ],
+          );
+        }
+        for (const row of data.messages || []) {
+          await client.query(
+            'INSERT INTO messages (id, channel_id, data, created_at, reply_to_id) VALUES ($1, $2, $3, $4, $5)',
+            [
+              row.id,
+              row.channel_id,
+              typeof row.data === 'string' ? row.data : JSON.stringify(row.data),
+              row.created_at,
+              row.reply_to_id,
+            ],
+          );
+        }
+        for (const row of data.idempotency || []) {
+          await client.query(
+            'INSERT INTO idempotency (key, message_id, data, created_at) VALUES ($1, $2, $3, $4)',
+            [
+              row.key,
+              row.message_id,
+              typeof row.data === 'string' ? row.data : JSON.stringify(row.data),
+              row.created_at,
+            ],
+          );
+        }
+        for (const row of data.attachments || []) {
+          await client.query(
+            'INSERT INTO attachments (id, channel_id, uploader_id, filename, mime_type, size, storage_key, quarantine_status, uploaded_at, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)',
+            [
+              row.id,
+              row.channel_id,
+              row.uploader_id,
+              row.filename,
+              row.mime_type,
+              row.size,
+              row.storage_key,
+              row.quarantine_status,
+              row.uploaded_at,
+              row.created_at,
+            ],
+          );
+        }
+        for (const row of data.messageReactions || []) {
+          await client.query(
+            'INSERT INTO message_reactions (message_id, account_id, emoji, created_at) VALUES ($1, $2, $3, $4)',
+            [row.message_id, row.account_id, row.emoji, row.created_at],
+          );
+        }
+        for (const row of data.channelReadStates || []) {
+          await client.query(
+            'INSERT INTO channel_read_states (channel_id, account_id, last_read_message_id, updated_at) VALUES ($1, $2, $3, $4)',
+            [row.channel_id, row.account_id, row.last_read_message_id, row.updated_at],
+          );
+        }
+        for (const row of data.auditEvents || []) {
+          await client.query(
+            'INSERT INTO audit_events (id, community_id, actor_id, action, target_type, target_id, metadata, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
+            [
+              row.id,
+              row.community_id,
+              row.actor_id,
+              row.action,
+              row.target_type,
+              row.target_id,
+              typeof row.metadata === 'string' ? row.metadata : JSON.stringify(row.metadata),
+              row.created_at,
+            ],
+          );
+        }
+        for (const row of data.bans || []) {
+          await client.query(
+            'INSERT INTO bans (community_id, account_id, reason, actor_id, created_at) VALUES ($1, $2, $3, $4, $5)',
+            [row.community_id, row.account_id, row.reason, row.actor_id, row.created_at],
+          );
+        }
+
+        await client.query('COMMIT');
+      } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+      } finally {
+        client.release();
+      }
     },
   };
 }

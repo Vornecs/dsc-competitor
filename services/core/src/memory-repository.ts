@@ -7,6 +7,7 @@
 import type {
   Account,
   AuditEvent,
+  Ban,
   Channel,
   ChannelReadState,
   Community,
@@ -42,11 +43,18 @@ export function createMemoryRepository(): Repository {
   const messageReactions = new Map<string, MessageReactionRecord>();
   const channelReadStates = new Map<string, ChannelReadState>();
   const auditEvents: AuditEvent[] = [];
+  const bansByCommunity = new Map<string, Ban[]>();
 
   return {
     // -- Accounts -----------------------------------------------------------
     async getAccountByEmail(email) {
       return accountsByEmail.get(email);
+    },
+    async getAccountById(id) {
+      for (const account of accountsByEmail.values()) {
+        if (account.id === id) return account;
+      }
+      return undefined;
     },
     async setAccount(email, account) {
       accountsByEmail.set(email, account);
@@ -369,6 +377,108 @@ export function createMemoryRepository(): Repository {
     },
     async deleteAttachment(id) {
       attachments.delete(id);
+    },
+
+    // -- Bans -----------------------------------------------------------------
+    async getBansByCommunity(communityId) {
+      return bansByCommunity.get(communityId) ?? [];
+    },
+    async getBan(communityId, accountId) {
+      return (bansByCommunity.get(communityId) ?? []).find((b) => b.accountId === accountId);
+    },
+    async addBan(ban) {
+      const list = bansByCommunity.get(ban.communityId) ?? [];
+      const filtered = list.filter((b) => b.accountId !== ban.accountId);
+      filtered.push({ ...ban });
+      bansByCommunity.set(ban.communityId, filtered);
+    },
+    async removeBan(communityId, accountId) {
+      const list = bansByCommunity.get(communityId) ?? [];
+      bansByCommunity.set(
+        communityId,
+        list.filter((b) => b.accountId !== accountId),
+      );
+    },
+
+    // -- Backup & Restore -----------------------------------------------------
+    async exportBackup() {
+      const data = {
+        accounts: Array.from(accountsByEmail.entries()),
+        emailChallenges: Array.from(emailChallenges.entries()),
+        passkeys: Array.from(passkeys.entries()),
+        sessions: Array.from(sessions.entries()),
+        communities: Array.from(communities.entries()),
+        memberships: Array.from(memberships.entries()),
+        channels: Array.from(channelsByCommunity.values()).flat(),
+        roles: Array.from(rolesByCommunity.values()).flat(),
+        invites: Array.from(invitesByCommunity.values()).flat(),
+        messages: [...messages],
+        idempotency: Array.from(idempotency.entries()),
+        attachments: Array.from(attachments.values()),
+        messageReactions: Array.from(messageReactions.values()),
+        channelReadStates: Array.from(channelReadStates.values()),
+        auditEvents: [...auditEvents],
+        bans: Array.from(bansByCommunity.values()).flat(),
+      };
+      return JSON.stringify(data);
+    },
+    async importBackup(backupJson) {
+      const data = JSON.parse(backupJson);
+      accountsByEmail.clear();
+      emailChallenges.clear();
+      passkeys.clear();
+      sessions.clear();
+      communities.clear();
+      memberships.clear();
+      channelsByCommunity.clear();
+      rolesByCommunity.clear();
+      invitesByCommunity.clear();
+      invitesByCode.clear();
+      messages.length = 0;
+      idempotency.clear();
+      attachments.clear();
+      messageReactions.clear();
+      channelReadStates.clear();
+      auditEvents.length = 0;
+      bansByCommunity.clear();
+
+      for (const [k, v] of data.accounts || []) accountsByEmail.set(k, v);
+      for (const [k, v] of data.emailChallenges || []) emailChallenges.set(k, v);
+      for (const [k, v] of data.passkeys || []) passkeys.set(k, v);
+      for (const [k, v] of data.sessions || []) sessions.set(k, v);
+      for (const [k, v] of data.communities || []) communities.set(k, v);
+      for (const [k, v] of data.memberships || []) memberships.set(k, v);
+      for (const chan of data.channels || []) {
+        const list = channelsByCommunity.get(chan.communityId) || [];
+        list.push(chan);
+        channelsByCommunity.set(chan.communityId, list);
+      }
+      for (const role of data.roles || []) {
+        const list = rolesByCommunity.get(role.communityId) || [];
+        list.push(role);
+        rolesByCommunity.set(role.communityId, list);
+      }
+      for (const invite of data.invites || []) {
+        const list = invitesByCommunity.get(invite.communityId) || [];
+        list.push(invite);
+        invitesByCommunity.set(invite.communityId, list);
+        invitesByCode.set(invite.code, invite);
+      }
+      if (data.messages) messages.push(...data.messages);
+      for (const [k, v] of data.idempotency || []) idempotency.set(k, v);
+      for (const attach of data.attachments || []) attachments.set(attach.id, attach);
+      for (const react of data.messageReactions || []) {
+        messageReactions.set(`${react.messageId}:${react.accountId}:${react.emoji}`, react);
+      }
+      for (const rs of data.channelReadStates || []) {
+        channelReadStates.set(`${rs.channelId}:${rs.accountId}`, rs);
+      }
+      if (data.auditEvents) auditEvents.push(...data.auditEvents);
+      for (const ban of data.bans || []) {
+        const list = bansByCommunity.get(ban.communityId) || [];
+        list.push(ban);
+        bansByCommunity.set(ban.communityId, list);
+      }
     },
   };
 }

@@ -129,13 +129,18 @@ describe('runMigrations', () => {
       '002_attachments.sql',
       '003_message_lifecycle.sql',
       '004_replies.sql',
+      '005_operator_diagnostics.sql',
     ]);
   });
 
   it('skips already-applied migrations', async () => {
     const { pool, insertedMigrations } = makeMockPool(['001_initial.sql', '002_attachments.sql']);
     await runMigrations(pool);
-    expect(insertedMigrations).toEqual(['003_message_lifecycle.sql', '004_replies.sql']);
+    expect(insertedMigrations).toEqual([
+      '003_message_lifecycle.sql',
+      '004_replies.sql',
+      '005_operator_diagnostics.sql',
+    ]);
   });
 
   it('is idempotent when all migrations are applied', async () => {
@@ -144,6 +149,7 @@ describe('runMigrations', () => {
       '002_attachments.sql',
       '003_message_lifecycle.sql',
       '004_replies.sql',
+      '005_operator_diagnostics.sql',
     ]);
     await runMigrations(pool);
     expect(insertedMigrations).toHaveLength(0);

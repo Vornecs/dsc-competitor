@@ -2013,4 +2013,208 @@ describe('operator audit log', () => {
     expect(page2.items.length).toBe(1);
     expect(page2.nextCursor).toBeNull();
   });
+
+  it('supports community bans, listing, unbanning, and join prevention', async () => {
+    const app = await buildApp();
+    apps.push(app);
+
+    // Create owner
+    const emailOwner = `owner-${crypto.randomUUID()}@test.cove.chat`;
+    const sendOwner = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/email/send-code',
+      payload: { email: emailOwner },
+    });
+    const verifyOwner = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/email/verify',
+      payload: { email: emailOwner, code: '123456', challengeId: sendOwner.json().challengeId },
+    });
+    const tokenOwner = verifyOwner.json().sessionToken as string;
+
+    // Create community
+    const communityRes = await app.inject({
+      method: 'POST',
+      url: '/v1/communities',
+      headers: { authorization: `Bearer ${tokenOwner}` },
+      payload: { name: 'Ban Test Community' },
+    });
+    const communityId = communityRes.json().id;
+
+    // Create target member
+    const emailMember = `member-${crypto.randomUUID()}@test.cove.chat`;
+    const sendMember = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/email/send-code',
+      payload: { email: emailMember },
+    });
+    const verifyMember = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/email/verify',
+      payload: { email: emailMember, code: '123456', challengeId: sendMember.json().challengeId },
+    });
+    const tokenMember = verifyMember.json().sessionToken as string;
+    const memberId = verifyMember.json().account.id;
+
+    // Join community
+    const joinRes = await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/join`,
+      headers: { authorization: `Bearer ${tokenMember}` },
+    });
+    expect(joinRes.statusCode).toBe(204);
+
+    // Non-admin tries to ban: should be forbidden
+    const failBan = await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/bans`,
+      headers: { authorization: `Bearer ${tokenMember}` },
+      payload: { accountId: memberId, reason: 'unauthorized ban' },
+    });
+    expect(failBan.statusCode).toBe(403);
+
+    // Owner bans member
+    const banRes = await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/bans`,
+      headers: { authorization: `Bearer ${tokenOwner}` },
+      payload: { accountId: memberId, reason: 'Toxic behavior' },
+    });
+    expect(banRes.statusCode).toBe(201);
+    expect(banRes.json()).toMatchObject({
+      communityId,
+      accountId: memberId,
+      reason: 'Toxic behavior',
+    });
+
+    // Banned member tries to join: should be forbidden
+    const joinResBanned = await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/join`,
+      headers: { authorization: `Bearer ${tokenMember}` },
+    });
+    expect(joinResBanned.statusCode).toBe(403);
+
+    // Banned member tries to use invite: should be forbidden
+    const inviteRes = await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/invites`,
+      headers: { authorization: `Bearer ${tokenOwner}` },
+      payload: { maxUses: 5, expiresAt: new Date(Date.now() + 86400000).toISOString() },
+    });
+    const inviteCode = inviteRes.json().invite.code;
+
+    const useInviteBanned = await app.inject({
+      method: 'POST',
+      url: `/v1/invites/${inviteCode}`,
+      headers: { authorization: `Bearer ${tokenMember}` },
+    });
+    expect(useInviteBanned.statusCode).toBe(403);
+
+    // List bans
+    const listBans = await app.inject({
+      method: 'GET',
+      url: `/v1/communities/${communityId}/bans`,
+      headers: { authorization: `Bearer ${tokenOwner}` },
+    });
+    expect(listBans.statusCode).toBe(200);
+    expect(listBans.json()).toHaveLength(1);
+    expect(listBans.json()[0].accountId).toBe(memberId);
+
+    // Owner unbans member
+    const unbanRes = await app.inject({
+      method: 'DELETE',
+      url: `/v1/communities/${communityId}/bans/${memberId}`,
+      headers: { authorization: `Bearer ${tokenOwner}` },
+    });
+    expect(unbanRes.statusCode).toBe(204);
+
+    // Member joins again successfully
+    const joinAgain = await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/join`,
+      headers: { authorization: `Bearer ${tokenMember}` },
+    });
+    expect(joinAgain.statusCode).toBe(204);
+  });
+
+  it('supports operator backup and restore drill', async () => {
+    const app = await buildApp();
+    apps.push(app);
+
+    // Perform backup of current state
+    const backupRes1 = await app.inject({
+      method: 'POST',
+      url: '/v1/operator/backup',
+      headers: { 'x-operator-key': 'dev-operator-key-42' },
+    });
+    expect(backupRes1.statusCode).toBe(200);
+    const backupData1 = backupRes1.body;
+
+    // Create a new user and community
+    const emailTest = `backup-test-${crypto.randomUUID()}@test.cove.chat`;
+    const sendRes = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/email/send-code',
+      payload: { email: emailTest },
+    });
+    const verifyRes = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/email/verify',
+      payload: { email: emailTest, code: '123456', challengeId: sendRes.json().challengeId },
+    });
+    const tokenTest = verifyRes.json().sessionToken as string;
+
+    const commRes = await app.inject({
+      method: 'POST',
+      url: '/v1/communities',
+      headers: { authorization: `Bearer ${tokenTest}` },
+      payload: { name: 'State 2 Community' },
+    });
+    expect(commRes.statusCode).toBe(201);
+    const state2CommunityId = commRes.json().id;
+
+    // Backup state 2
+    const backupRes2 = await app.inject({
+      method: 'POST',
+      url: '/v1/operator/backup',
+      headers: { 'x-operator-key': 'dev-operator-key-42' },
+    });
+    expect(backupRes2.statusCode).toBe(200);
+    const backupData2 = backupRes2.body;
+
+    // Restore back to state 1
+    const restoreRes1 = await app.inject({
+      method: 'POST',
+      url: '/v1/operator/restore',
+      headers: { 'x-operator-key': 'dev-operator-key-42', 'content-type': 'application/json' },
+      payload: backupData1,
+    });
+    expect(restoreRes1.statusCode).toBe(204);
+
+    // Verify community from state 2 is gone (returns 401 because auth session is also gone!)
+    const getCommRes = await app.inject({
+      method: 'GET',
+      url: `/v1/communities/${state2CommunityId}`,
+      headers: { authorization: `Bearer ${tokenTest}` },
+    });
+    expect(getCommRes.statusCode).toBe(401);
+
+    // Restore to state 2
+    const restoreRes2 = await app.inject({
+      method: 'POST',
+      url: '/v1/operator/restore',
+      headers: { 'x-operator-key': 'dev-operator-key-42', 'content-type': 'application/json' },
+      payload: backupData2,
+    });
+    expect(restoreRes2.statusCode).toBe(204);
+
+    // Verify community is restored and session is active
+    const getCommRes2 = await app.inject({
+      method: 'GET',
+      url: `/v1/communities/${state2CommunityId}/stats`,
+      headers: { authorization: `Bearer ${tokenTest}` },
+    });
+    expect(getCommRes2.statusCode).toBe(200);
+  });
 });

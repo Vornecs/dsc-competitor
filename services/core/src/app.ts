@@ -27,6 +27,8 @@ import {
   permissionSimulatorRequestSchema,
   resolvePermission,
   communityStatsSchema,
+  banMemberRequestSchema,
+  banSchema,
   type Attachment,
   type AttentionItem,
   type BootstrapState,
@@ -45,6 +47,7 @@ import {
   type PermissionDecision,
   type Role,
   type Invite,
+  type Ban,
 } from '@cove/contracts';
 import type { ObjectStorage } from './object-storage.js';
 import { createMemoryObjectStorage } from './object-storage.js';
@@ -1804,6 +1807,11 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
         );
       }
 
+      const isBanned = await repo.getBan(community.id, account.id);
+      if (isBanned) {
+        return problem(reply, 403, 'Forbidden', 'You are banned from this community.', request.url);
+      }
+
       await repo.addMembership(community.id, {
         accountId: account.id,
         role: 'member',
@@ -1888,6 +1896,176 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
       } else {
         community.memberCount = remaining.length;
       }
+      return reply.code(204).send();
+    },
+  );
+
+  // Community Bans
+  app.get<{ Params: { communityId: string } }>(
+    '/v1/communities/:communityId/bans',
+    async (request, reply) => {
+      const ok = await requireAuth(request, reply);
+      if (!ok) return;
+
+      const { account } = (request as any).user;
+      const community = await repo.getCommunity(request.params.communityId);
+      if (!community) {
+        return problem(
+          reply,
+          404,
+          'Community not found',
+          'The requested community does not exist.',
+          request.url,
+        );
+      }
+
+      const membership = await requireMembership(reply, community.id, account.id, request.url);
+      if (!membership) return;
+      if (membership.role !== 'owner' && membership.role !== 'admin') {
+        return problem(
+          reply,
+          403,
+          'Forbidden',
+          'Only community owners and admins can view bans.',
+          request.url,
+        );
+      }
+
+      const bans = await repo.getBansByCommunity(community.id);
+      return reply.code(200).send(bans);
+    },
+  );
+
+  app.post<{ Params: { communityId: string } }>(
+    '/v1/communities/:communityId/bans',
+    async (request, reply) => {
+      const ok = await requireAuth(request, reply);
+      if (!ok) return;
+
+      const { account } = (request as any).user;
+      const community = await repo.getCommunity(request.params.communityId);
+      if (!community) {
+        return problem(
+          reply,
+          404,
+          'Community not found',
+          'The requested community does not exist.',
+          request.url,
+        );
+      }
+
+      const membership = await requireMembership(reply, community.id, account.id, request.url);
+      if (!membership) return;
+      if (membership.role !== 'owner' && membership.role !== 'admin') {
+        return problem(
+          reply,
+          403,
+          'Forbidden',
+          'Only community owners and admins can ban members.',
+          request.url,
+        );
+      }
+
+      const parsed = banMemberRequestSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return problem(
+          reply,
+          400,
+          'Invalid request',
+          parsed.error.issues.map((issue) => issue.message).join('; '),
+          request.url,
+        );
+      }
+
+      const { accountId, reason } = parsed.data;
+
+      const targetMembership = await repo.getMembership(community.id, accountId);
+      if (targetMembership?.role === 'owner') {
+        return problem(reply, 400, 'Bad Request', 'Cannot ban the community owner.', request.url);
+      }
+
+      const existingBan = await repo.getBan(community.id, accountId);
+      if (existingBan) {
+        return problem(reply, 409, 'Conflict', 'User is already banned.', request.url);
+      }
+
+      const ban: Ban = {
+        communityId: community.id,
+        accountId,
+        reason,
+        actorId: account.id,
+        createdAt: new Date().toISOString(),
+      };
+
+      await repo.addBan(ban);
+
+      if (targetMembership) {
+        await repo.removeMembership(community.id, accountId);
+        hub.revokeCommunityAccess(accountId, community.id);
+        await recordAudit(community.id, account.id, 'member.left', 'member', accountId, {
+          removedBy: account.id,
+          reason: 'Banned',
+        });
+        community.memberCount = (await repo.getMemberships(community.id)).length;
+      }
+
+      await recordAudit(community.id, account.id, 'member.banned', 'member', accountId, {
+        bannedBy: account.id,
+        reason: reason ?? null,
+      });
+
+      return reply.code(201).send(ban);
+    },
+  );
+
+  app.delete<{ Params: { communityId: string; accountId: string } }>(
+    '/v1/communities/:communityId/bans/:accountId',
+    async (request, reply) => {
+      const ok = await requireAuth(request, reply);
+      if (!ok) return;
+
+      const { account } = (request as any).user;
+      const community = await repo.getCommunity(request.params.communityId);
+      if (!community) {
+        return problem(
+          reply,
+          404,
+          'Community not found',
+          'The requested community does not exist.',
+          request.url,
+        );
+      }
+
+      const membership = await requireMembership(reply, community.id, account.id, request.url);
+      if (!membership) return;
+      if (membership.role !== 'owner' && membership.role !== 'admin') {
+        return problem(
+          reply,
+          403,
+          'Forbidden',
+          'Only community owners and admins can manage bans.',
+          request.url,
+        );
+      }
+
+      const targetId = request.params.accountId;
+      const ban = await repo.getBan(community.id, targetId);
+      if (!ban) {
+        return problem(
+          reply,
+          404,
+          'Ban not found',
+          'The specified user is not banned from this community.',
+          request.url,
+        );
+      }
+
+      await repo.removeBan(community.id, targetId);
+
+      await recordAudit(community.id, account.id, 'member.unbanned', 'member', targetId, {
+        unbannedBy: account.id,
+      });
+
       return reply.code(204).send();
     },
   );
@@ -2620,6 +2798,11 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
       );
     }
 
+    const isBanned = await repo.getBan(community.id, account.id);
+    if (isBanned) {
+      return problem(reply, 403, 'Forbidden', 'You are banned from this community.', request.url);
+    }
+
     // Check if invite is expired
     if (new Date(invite.expiresAt) < new Date()) {
       return problem(reply, 410, 'Invite expired', 'This invite has expired.', request.url);
@@ -2740,6 +2923,31 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
       }
       if (frame.data.op === 'HEARTBEAT') await hub.heartbeat(socket);
     });
+  });
+
+  // Operator backup/restore
+  app.post('/v1/operator/backup', async (request, reply) => {
+    const operatorKey = request.headers['x-operator-key'];
+    const expectedKey = process.env.OPERATOR_KEY || 'dev-operator-key-42';
+    if (operatorKey !== expectedKey) {
+      return problem(reply, 401, 'Unauthorized', 'Missing or invalid operator key.', request.url);
+    }
+
+    const backup = await repo.exportBackup();
+    return reply.code(200).header('content-type', 'application/json').send(backup);
+  });
+
+  app.post('/v1/operator/restore', async (request, reply) => {
+    const operatorKey = request.headers['x-operator-key'];
+    const expectedKey = process.env.OPERATOR_KEY || 'dev-operator-key-42';
+    if (operatorKey !== expectedKey) {
+      return problem(reply, 401, 'Unauthorized', 'Missing or invalid operator key.', request.url);
+    }
+
+    const backupJson =
+      typeof request.body === 'string' ? request.body : JSON.stringify(request.body);
+    await repo.importBackup(backupJson);
+    return reply.code(204).send();
   });
 
   app.addHook('onClose', async () => {
