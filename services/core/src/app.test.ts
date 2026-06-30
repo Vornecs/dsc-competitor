@@ -1518,4 +1518,87 @@ describe('managed message lifecycle', () => {
     });
     expect(rejected.statusCode).toBe(400);
   });
+
+  it('creates a reply with parent preview and enforces same-channel constraint', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const { owner, communityId, channelId } = await setup(app);
+
+    const parentResp = await sendMessage(app, channelId, owner.token, 'Parent message content');
+    expect(parentResp.statusCode).toBe(201);
+    const parentId = parentResp.json().id as string;
+
+    // Send a reply
+    const replyResp = await app.inject({
+      method: 'POST',
+      url: `/v1/channels/${channelId}/messages`,
+      headers: {
+        authorization: `Bearer ${owner.token}`,
+        'idempotency-key': `reply-${crypto.randomUUID()}`,
+      },
+      payload: {
+        content: 'This is a reply',
+        clientNonce: `nonce-${crypto.randomUUID()}`,
+        replyToId: parentId,
+      },
+    });
+    expect(replyResp.statusCode).toBe(201);
+    const replyMsg = replyResp.json();
+    expect(replyMsg.replyToId).toBe(parentId);
+    expect(replyMsg.replyPreview).toMatchObject({
+      id: parentId,
+      content: 'Parent message content',
+      authorDisplayName: expect.any(String),
+      availability: 'plaintext',
+    });
+
+    // Reply appears in channel message list with its preview intact
+    const listResp = await app.inject({
+      method: 'GET',
+      url: `/v1/channels/${channelId}/messages`,
+      headers: { authorization: `Bearer ${owner.token}` },
+    });
+    const found = (listResp.json().items as any[]).find((m: any) => m.id === replyMsg.id);
+    expect(found?.replyToId).toBe(parentId);
+    expect(found?.replyPreview?.id).toBe(parentId);
+
+    // Reply to nonexistent message returns 400
+    const badReply = await app.inject({
+      method: 'POST',
+      url: `/v1/channels/${channelId}/messages`,
+      headers: {
+        authorization: `Bearer ${owner.token}`,
+        'idempotency-key': `reply-bad-${crypto.randomUUID()}`,
+      },
+      payload: {
+        content: 'Bad reply',
+        clientNonce: `nonce-${crypto.randomUUID()}`,
+        replyToId: 'nonexistent-message-id',
+      },
+    });
+    expect(badReply.statusCode).toBe(400);
+    expect(badReply.headers['content-type']).toContain('application/problem+json');
+
+    // Reply to a message in a different channel returns 400
+    const otherChannel = await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/channels`,
+      headers: { authorization: `Bearer ${owner.token}` },
+      payload: { name: 'other-chat', kind: 'text', category: 'Chat' },
+    });
+    const crossChannelReply = await app.inject({
+      method: 'POST',
+      url: `/v1/channels/${otherChannel.json().id}/messages`,
+      headers: {
+        authorization: `Bearer ${owner.token}`,
+        'idempotency-key': `reply-cross-${crypto.randomUUID()}`,
+      },
+      payload: {
+        content: 'Cross-channel reply',
+        clientNonce: `nonce-${crypto.randomUUID()}`,
+        replyToId: parentId,
+      },
+    });
+    expect(crossChannelReply.statusCode).toBe(400);
+  });
 });

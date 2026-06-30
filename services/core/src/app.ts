@@ -30,6 +30,7 @@ import {
   type EventEnvelope,
   type GatewayServerFrame,
   type Message,
+  type MessageReplyPreview,
   type ProblemDetail,
   type Account,
   type AuditEvent,
@@ -979,6 +980,26 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
         }));
       }
 
+      let replyPreview: MessageReplyPreview | undefined;
+      if (parsed.data.replyToId) {
+        const parent = await repo.getMessage(parsed.data.replyToId);
+        if (!parent || parent.channelId !== channel.id) {
+          return problem(
+            reply,
+            400,
+            'Invalid reply target',
+            'The reply target message does not exist in this channel.',
+            request.url,
+          );
+        }
+        replyPreview = {
+          id: parent.id,
+          content: parent.content,
+          authorDisplayName: parent.author.displayName,
+          availability: parent.availability,
+        };
+      }
+
       const message = messageSchema.parse({
         id: crypto.randomUUID(),
         channelId: channel.id,
@@ -989,6 +1010,8 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
         editedAt: null,
         reactions: [],
         attachments: resolvedAttachments,
+        replyToId: parsed.data.replyToId,
+        replyPreview,
       });
       await repo.addMessage(message);
       await repo.setIdempotentMessage(scopedIdempotencyKey, message);

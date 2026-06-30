@@ -10,7 +10,9 @@ let repo: Repository;
 if (process.env.DATABASE_URL) {
   const { default: pg } = await import('pg');
   const { createPostgresRepository } = await import('./postgres-repository.js');
+  const { runMigrations } = await import('./migrations.js');
   const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL, max: 20 });
+  await runMigrations(pool);
   repo = createPostgresRepository(pool);
 } else {
   repo = createMemoryRepository();
