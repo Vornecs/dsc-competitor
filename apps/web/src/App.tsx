@@ -48,7 +48,10 @@ import {
   ShieldCheck,
   Smile,
   Volume2,
+  MicOff,
+  VolumeX,
 } from 'lucide-react';
+import { Room, RoomEvent, Track } from 'livekit-client';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { resolveRuntimeConfig } from './runtime-config';
@@ -268,6 +271,9 @@ export function App() {
   const [channelScreenShares, setChannelScreenShares] = useState<
     Record<string, { participantId: string; trackId: string }[]>
   >({});
+  const [isMuted, setIsMuted] = useState(false);
+  const [isDeafened, setIsDeafened] = useState(false);
+  const roomRef = useRef<Room | null>(null);
   const [hoveredChannel, setHoveredChannel] = useState<{
     id: string;
     name: string;
@@ -782,6 +788,153 @@ export function App() {
     }
   }
 
+  const isCurrentlySharingScreen = useMemo(() => {
+    if (!activeVoiceChannelId) return false;
+    const shares = channelScreenShares[activeVoiceChannelId] || [];
+    return shares.some((s) => s.participantId === bootstrap.account.id);
+  }, [channelScreenShares, activeVoiceChannelId, bootstrap.account.id]);
+
+  async function toggleScreenShare() {
+    if (!activeVoiceChannelId) return;
+    const isFake = voiceSession?.token.startsWith('fake-token-');
+
+    if (isCurrentlySharingScreen) {
+      try {
+        if (!isFake && roomRef.current) {
+          await roomRef.current.localParticipant.setScreenShareEnabled(false);
+        }
+        const headers: Record<string, string> = {};
+        if (sessionToken) headers['authorization'] = `Bearer ${sessionToken}`;
+        await fetch(`${API_BASE}/v1/channels/${activeVoiceChannelId}/screen/stop`, {
+          method: 'POST',
+          headers,
+        });
+      } catch (err) {
+        console.error('Failed to stop screen share:', err);
+      }
+    } else {
+      try {
+        if (!isFake && roomRef.current) {
+          await roomRef.current.localParticipant.setScreenShareEnabled(true);
+        }
+        const headers: Record<string, string> = {};
+        if (sessionToken) headers['authorization'] = `Bearer ${sessionToken}`;
+        const response = await fetch(
+          `${API_BASE}/v1/channels/${activeVoiceChannelId}/screen/start`,
+          {
+            method: 'POST',
+            headers,
+          },
+        );
+        if (!response.ok) {
+          if (!isFake && roomRef.current) {
+            await roomRef.current.localParticipant.setScreenShareEnabled(false);
+          }
+        }
+      } catch (err) {
+        console.error('Failed to start screen share:', err);
+        if (!isFake && roomRef.current) {
+          try {
+            await roomRef.current.localParticipant.setScreenShareEnabled(false);
+          } catch {}
+        }
+      }
+    }
+  }
+
+  // Manage LiveKit Room connection based on voiceSession
+  useEffect(() => {
+    if (import.meta.env.MODE === 'test') return;
+
+    if (!voiceSession) {
+      if (roomRef.current) {
+        const room = roomRef.current;
+        roomRef.current = null;
+        room.disconnect().catch(console.error);
+      }
+      return;
+    }
+
+    // Skip fake provider path to keep it deterministic for tests
+    if (voiceSession.token.startsWith('fake-token-')) {
+      if (roomRef.current) {
+        const room = roomRef.current;
+        roomRef.current = null;
+        room.disconnect().catch(console.error);
+      }
+      return;
+    }
+
+    // If already connected to the current session room, do not reconnect
+    if (roomRef.current && roomRef.current.name === voiceSession.roomName) {
+      return;
+    }
+
+    // Disconnect old room if any
+    if (roomRef.current) {
+      const room = roomRef.current;
+      roomRef.current = null;
+      room.disconnect().catch(console.error);
+    }
+
+    const room = new Room({
+      adaptiveStream: true,
+      dynacast: true,
+    });
+    roomRef.current = room;
+
+    // Track subscription handlers to attach/detach audio elements
+    room.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
+      if (track.kind === Track.Kind.Audio) {
+        const element = track.attach();
+        element.muted = isDeafened;
+        document.body.appendChild(element);
+      }
+    });
+
+    room.on(RoomEvent.TrackUnsubscribed, (track, publication, participant) => {
+      if (track.kind === Track.Kind.Audio) {
+        track.detach().forEach((el) => el.remove());
+      }
+    });
+
+    room
+      .connect(voiceSession.url, voiceSession.token)
+      .then(() => {
+        console.log('Connected to LiveKit room:', voiceSession.roomName);
+        const shouldPublishMicrophone = !!voiceSession.canPublish && !isMuted;
+        return room.localParticipant.setMicrophoneEnabled(shouldPublishMicrophone);
+      })
+      .catch((err) => {
+        console.error('LiveKit connection error:', err);
+      });
+
+    return () => {
+      // Clean up room connection if session is cleared or changes
+    };
+  }, [voiceSession?.roomName, voiceSession?.url]);
+
+  // Synchronize microphone publication with permissions and mute state
+  useEffect(() => {
+    if (import.meta.env.MODE === 'test') return;
+    const room = roomRef.current;
+    if (!room || !voiceSession) return;
+    if (voiceSession.token.startsWith('fake-token-')) return;
+
+    const shouldPublishMicrophone = !!voiceSession.canPublish && !isMuted;
+    room.localParticipant.setMicrophoneEnabled(shouldPublishMicrophone).catch((err) => {
+      console.error('Failed to sync microphone state:', err);
+    });
+  }, [voiceSession?.canPublish, isMuted, voiceSession]);
+
+  // Synchronize deafen state with remote audio elements
+  useEffect(() => {
+    const audios = document.querySelectorAll('audio');
+    audios.forEach((audio) => {
+      audio.muted = isDeafened;
+    });
+  }, [isDeafened]);
+
   async function joinVoice(channelId: string) {
     if (import.meta.env.MODE === 'test') return;
     try {
@@ -801,6 +954,20 @@ export function App() {
   async function leaveVoice(channelId: string) {
     if (import.meta.env.MODE === 'test') return;
     try {
+      const isFake = voiceSession?.token.startsWith('fake-token-');
+      if (!isFake && roomRef.current) {
+        try {
+          await roomRef.current.localParticipant.setScreenShareEnabled(false);
+        } catch {}
+      }
+      if (isCurrentlySharingScreen) {
+        const headers: Record<string, string> = {};
+        if (sessionToken) headers['authorization'] = `Bearer ${sessionToken}`;
+        await fetch(`${API_BASE}/v1/channels/${channelId}/screen/stop`, {
+          method: 'POST',
+          headers,
+        }).catch(console.error);
+      }
       const headers: Record<string, string> = {};
       if (sessionToken) headers['authorization'] = `Bearer ${sessionToken}`;
       await fetch(`${API_BASE}/v1/channels/${channelId}/voice/leave`, {
@@ -808,6 +975,10 @@ export function App() {
         headers,
       });
     } finally {
+      if (roomRef.current) {
+        roomRef.current.disconnect().catch(console.error);
+        roomRef.current = null;
+      }
       setVoiceSession(null);
       setActiveVoiceChannelId(null);
     }
@@ -1106,15 +1277,40 @@ export function App() {
             </button>
           )}
           {activeVoiceChannelId && (
-            <IconButton label="Leave voice" onClick={() => leaveVoice(activeVoiceChannelId)}>
-              <Volume2 size={17} />
-            </IconButton>
+            <>
+              <IconButton label="Leave voice" onClick={() => leaveVoice(activeVoiceChannelId)}>
+                <Volume2 size={17} />
+              </IconButton>
+              <IconButton
+                label={isCurrentlySharingScreen ? 'Stop sharing screen' : 'Share screen'}
+                onClick={toggleScreenShare}
+              >
+                <Monitor
+                  size={17}
+                  style={{ color: isCurrentlySharingScreen ? 'var(--accent)' : 'inherit' }}
+                />
+              </IconButton>
+            </>
           )}
-          <IconButton label="Mute microphone">
-            <Mic size={17} />
+          <IconButton
+            label={isMuted ? 'Unmute microphone' : 'Mute microphone'}
+            onClick={() => setIsMuted((m) => !m)}
+          >
+            {isMuted ? (
+              <MicOff size={17} style={{ color: 'var(--status-danger, #ef4444)' }} />
+            ) : (
+              <Mic size={17} />
+            )}
           </IconButton>
-          <IconButton label="Deafen">
-            <Headphones size={17} />
+          <IconButton
+            label={isDeafened ? 'Undeafen' : 'Deafen'}
+            onClick={() => setIsDeafened((d) => !d)}
+          >
+            {isDeafened ? (
+              <VolumeX size={17} style={{ color: 'var(--status-danger, #ef4444)' }} />
+            ) : (
+              <Headphones size={17} />
+            )}
           </IconButton>
           <IconButton label="User settings">
             <Settings size={17} />

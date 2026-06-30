@@ -44,12 +44,7 @@ describe('LiveKitMediaProvider', () => {
         return {} as never;
       },
     });
-    const session = await provider.setPublishPermission(
-      'stage-1',
-      'account-1',
-      'Avery',
-      true,
-    );
+    const session = await provider.setPublishPermission('stage-1', 'account-1', 'Avery', true);
     const claims = await new TokenVerifier(config.apiKey, config.apiSecret).verify(session.token);
 
     expect(session.canPublish).toBe(true);
@@ -75,8 +70,8 @@ describe('LiveKitMediaProvider', () => {
   });
 
   it('rejects non-WebSocket client URLs', () => {
-    expect(() => new LiveKitMediaProvider({ ...config, url: 'https://media.example.test' })).toThrow(
-      'LIVEKIT_URL must use ws:// or wss://',
-    );
+    expect(
+      () => new LiveKitMediaProvider({ ...config, url: 'https://media.example.test' }),
+    ).toThrow('LIVEKIT_URL must use ws:// or wss://');
   });
 });

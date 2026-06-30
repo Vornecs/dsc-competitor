@@ -112,9 +112,7 @@ export class LiveKitMediaProvider implements MediaProvider {
   }
 }
 
-export function createMediaProviderFromEnv(
-  env: NodeJS.ProcessEnv = process.env,
-): MediaProvider {
+export function createMediaProviderFromEnv(env: NodeJS.ProcessEnv = process.env): MediaProvider {
   const apiKey = env.LIVEKIT_API_KEY;
   const apiSecret = env.LIVEKIT_API_SECRET;
   const url = env.LIVEKIT_URL ?? env.LIVEKIT_HOST_URL;
