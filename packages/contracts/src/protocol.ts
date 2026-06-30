@@ -383,6 +383,18 @@ export const voiceSessionSchema = z.object({
 });
 export type VoiceSession = z.infer<typeof voiceSessionSchema>;
 
+export const voiceParticipantJoinedSchema = z.object({
+  channelId: z.string().min(1),
+  participant: participantSchema,
+});
+export type VoiceParticipantJoined = z.infer<typeof voiceParticipantJoinedSchema>;
+
+export const voiceParticipantLeftSchema = z.object({
+  channelId: z.string().min(1),
+  participantId: z.string().min(1),
+});
+export type VoiceParticipantLeft = z.infer<typeof voiceParticipantLeftSchema>;
+
 export const rolePermissionSchema = z.object({
   permission: z.string().trim().min(1).max(64),
   effect: z.enum(['allow', 'deny']),

@@ -7,11 +7,16 @@ import {
   messageReactionUpdateSchema,
   messageSchema,
   presenceUpdateSchema,
+  voiceParticipantJoinedSchema,
+  voiceParticipantLeftSchema,
+  voiceSessionSchema,
   type BootstrapState,
   type AttentionItem,
   type Channel,
   type CommunityStats,
   type Message,
+  type Participant,
+  type VoiceSession,
 } from '@cove/contracts';
 import { Avatar, IconButton, StatusPill } from '@cove/ui';
 import {
@@ -95,6 +100,29 @@ export function reconcileAttentionItem(
   return [incoming, ...current.filter((item) => item.id !== incoming.id)];
 }
 
+export function reconcileVoiceJoin(
+  channels: Channel[],
+  channelId: string,
+  participant: Participant,
+): Channel[] {
+  return channels.map((ch) => {
+    if (ch.id !== channelId) return ch;
+    if (ch.participants.some((p) => p.id === participant.id)) return ch;
+    return { ...ch, participants: [...ch.participants, participant] };
+  });
+}
+
+export function reconcileVoiceLeave(
+  channels: Channel[],
+  channelId: string,
+  participantId: string,
+): Channel[] {
+  return channels.map((ch) => {
+    if (ch.id !== channelId) return ch;
+    return { ...ch, participants: ch.participants.filter((p) => p.id !== participantId) };
+  });
+}
+
 function PrivacyNotice({ channel }: { channel: Channel }) {
   const managed = channel.privacy.mode === 'managed';
   return (
@@ -133,6 +161,8 @@ export function App() {
   const [density, setDensity] = useState<Density>('comfortable');
   const [theme, setTheme] = useState<'dark' | 'light' | 'contrast'>('dark');
   const [communityStats, setCommunityStats] = useState<CommunityStats | null>(null);
+  const [activeVoiceChannelId, setActiveVoiceChannelId] = useState<string | null>(null);
+  const [voiceSession, setVoiceSession] = useState<VoiceSession | null>(null);
   const sessionToken: string | null = null;
   const endRef = useRef<HTMLDivElement>(null);
 
@@ -242,6 +272,36 @@ export function App() {
           );
         }
       }
+      if (frame.op === 'EVENT' && frame.data.type === 'voice.participant.joined') {
+        const event = voiceParticipantJoinedSchema.safeParse(frame.data.data);
+        if (event.success) {
+          setBootstrap((current) => ({
+            ...current,
+            channels: reconcileVoiceJoin(
+              current.channels,
+              event.data.channelId,
+              event.data.participant,
+            ),
+          }));
+        }
+      }
+      if (frame.op === 'EVENT' && frame.data.type === 'voice.participant.left') {
+        const event = voiceParticipantLeftSchema.safeParse(frame.data.data);
+        if (event.success) {
+          setBootstrap((current) => ({
+            ...current,
+            channels: reconcileVoiceLeave(
+              current.channels,
+              event.data.channelId,
+              event.data.participantId,
+            ),
+          }));
+          setActiveVoiceChannelId((current) => (current === event.data.channelId ? null : current));
+          setVoiceSession((current) =>
+            current?.participantId === event.data.participantId ? null : current,
+          );
+        }
+      }
     });
     socket.addEventListener('close', () => setConnection('preview'));
     socket.addEventListener('error', () => setConnection('preview'));
@@ -305,6 +365,37 @@ export function App() {
       setMessages((current) => reconcileSavedMessage(current, optimistic.id, saved));
     } catch {
       setConnection('preview');
+    }
+  }
+
+  async function joinVoice(channelId: string) {
+    if (import.meta.env.MODE === 'test') return;
+    try {
+      const headers: Record<string, string> = {};
+      if (sessionToken) headers['authorization'] = `Bearer ${sessionToken}`;
+      const response = await fetch(`${API_BASE}/v1/channels/${channelId}/voice/join`, {
+        method: 'POST',
+        headers,
+      });
+      if (!response.ok) return;
+      const session = voiceSessionSchema.parse(await response.json());
+      setVoiceSession(session);
+      setActiveVoiceChannelId(channelId);
+    } catch {}
+  }
+
+  async function leaveVoice(channelId: string) {
+    if (import.meta.env.MODE === 'test') return;
+    try {
+      const headers: Record<string, string> = {};
+      if (sessionToken) headers['authorization'] = `Bearer ${sessionToken}`;
+      await fetch(`${API_BASE}/v1/channels/${channelId}/voice/leave`, {
+        method: 'POST',
+        headers,
+      });
+    } finally {
+      setVoiceSession(null);
+      setActiveVoiceChannelId(null);
     }
   }
 
@@ -411,8 +502,20 @@ export function App() {
           <Avatar initials={bootstrap.account.initials} status={bootstrap.account.status} />
           <div>
             <strong>{bootstrap.account.displayName}</strong>
-            <span>@{bootstrap.account.handle}</span>
+            {activeVoiceChannelId ? (
+              <span className="voice-dock-status">
+                <Volume2 size={11} />
+                {communityChannels.find((c) => c.id === activeVoiceChannelId)?.name ?? 'Voice'}
+              </span>
+            ) : (
+              <span>@{bootstrap.account.handle}</span>
+            )}
           </div>
+          {activeVoiceChannelId && (
+            <IconButton label="Leave voice" onClick={() => leaveVoice(activeVoiceChannelId)}>
+              <Volume2 size={17} />
+            </IconButton>
+          )}
           <IconButton label="Mute microphone">
             <Mic size={17} />
           </IconButton>
@@ -499,10 +602,23 @@ export function App() {
                 <h2>{activeChannel.name}</h2>
                 <p>
                   {activeChannel.participants.length
-                    ? `${activeChannel.participants.length} friends are already here.`
+                    ? `${activeChannel.participants.length} ${activeChannel.participants.length === 1 ? 'friend is' : 'friends are'} already here.`
                     : 'This room is quiet right now.'}
                 </p>
-                <button type="button">Join voice</button>
+                {activeVoiceChannelId === activeChannel.id ? (
+                  <button type="button" onClick={() => leaveVoice(activeChannel.id)}>
+                    Leave voice
+                  </button>
+                ) : (
+                  <button type="button" onClick={() => joinVoice(activeChannel.id)}>
+                    Join voice
+                  </button>
+                )}
+                {voiceSession && activeVoiceChannelId === activeChannel.id && (
+                  <small className="voice-session-info">
+                    Connected · Room: {voiceSession.roomName}
+                  </small>
+                )}
                 <small>E2EE · Device check before joining · No cloud recording</small>
               </section>
             ) : (

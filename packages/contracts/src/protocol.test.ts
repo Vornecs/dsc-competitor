@@ -15,6 +15,8 @@ import {
   resolvePermission,
   stageConfigSchema,
   presenceUpdateSchema,
+  voiceParticipantJoinedSchema,
+  voiceParticipantLeftSchema,
 } from './index.js';
 
 describe('privacy contracts', () => {
@@ -307,5 +309,30 @@ describe('presence contracts', () => {
       status: 'offline',
     });
     expect(missingFields.success).toBe(false);
+  });
+});
+
+describe('voice participant event contracts', () => {
+  it('validates voice.participant.joined and voice.participant.left payloads', () => {
+    const joined = voiceParticipantJoinedSchema.safeParse({
+      channelId: 'channel-1',
+      participant: {
+        id: 'account-1',
+        displayName: 'Ren',
+        initials: 'R',
+        status: 'online',
+      },
+    });
+    expect(joined.success).toBe(true);
+
+    expect(voiceParticipantJoinedSchema.safeParse({ channelId: '' }).success).toBe(false);
+
+    const left = voiceParticipantLeftSchema.safeParse({
+      channelId: 'channel-1',
+      participantId: 'account-1',
+    });
+    expect(left.success).toBe(true);
+
+    expect(voiceParticipantLeftSchema.safeParse({ channelId: 'channel-1' }).success).toBe(false);
   });
 });

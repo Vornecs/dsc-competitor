@@ -8,6 +8,8 @@ import {
   reconcileMessageUpdate,
   reconcileReactionUpdate,
   reconcileSavedMessage,
+  reconcileVoiceJoin,
+  reconcileVoiceLeave,
 } from './App';
 
 describe('application shell', () => {
@@ -80,5 +82,35 @@ describe('application shell', () => {
 
     expect(reconcileAttentionItem([existing], reply)).toEqual([reply, existing]);
     expect(reconcileAttentionItem([reply, existing], reply)).toEqual([reply, existing]);
+  });
+
+  it('reconciles voice participant join and leave events', () => {
+    const channel = demoBootstrap.channels.find((c) => c.kind === 'voice')!;
+    const participant = {
+      id: 'account-newcomer',
+      displayName: 'Nova',
+      initials: 'N',
+      status: 'online' as const,
+    };
+
+    const afterJoin = reconcileVoiceJoin(demoBootstrap.channels, channel.id, participant);
+    const joined = afterJoin.find((c) => c.id === channel.id)!;
+    expect(joined.participants.some((p) => p.id === 'account-newcomer')).toBe(true);
+
+    // Idempotent: joining again does not duplicate
+    const afterJoinAgain = reconcileVoiceJoin(afterJoin, channel.id, participant);
+    expect(
+      afterJoinAgain
+        .find((c) => c.id === channel.id)!
+        .participants.filter((p) => p.id === 'account-newcomer'),
+    ).toHaveLength(1);
+
+    const afterLeave = reconcileVoiceLeave(afterJoin, channel.id, 'account-newcomer');
+    const left = afterLeave.find((c) => c.id === channel.id)!;
+    expect(left.participants.some((p) => p.id === 'account-newcomer')).toBe(false);
+
+    // Other channels are unaffected
+    const textChannel = demoBootstrap.channels.find((c) => c.kind === 'text')!;
+    expect(afterLeave.find((c) => c.id === textChannel.id)).toEqual(textChannel);
   });
 });

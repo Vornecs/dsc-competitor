@@ -1,10 +1,10 @@
 # Cove Product Plan
 
-> Last updated: 2026-06-30 | Cycle: 19 | Phase: 1 — Core Features | Build health: verified; voice room media channels and permission-gated join/leave implemented
+> Last updated: 2026-06-30 | Cycle: 20 | Phase: 1 — Core Features | Build health: verified; voice participant gateway events and web client join/leave wiring live
 >
-> Current objective: Cycle 19 implemented voice-room session contracts, MediaProvider interface abstraction, fake/LiveKit media providers, join/leave endpoints, automated room-switching, and permission gating.
+> Current objective: Cycle 20 added `voiceParticipantJoinedSchema`/`voiceParticipantLeftSchema` to `@cove/contracts`, exported `reconcileVoiceJoin`/`reconcileVoiceLeave` from the web client with tests, handled `voice.participant.joined`/`voice.participant.left` gateway events (updating channel participant lists in real time), wired Join/Leave voice buttons to the API, and showed an in-voice indicator in the user dock footer.
 >
-> Next gate: voice room media channels and desktop client integration.
+> Next gate: community data export (E-006 portability), web client audit log panel, PostgreSQL voice participant persistence, and desktop PTT integration.
 
 This file is the authoritative product, architecture, and delivery record. A behavior or scope change is incomplete until this file is reconciled in the same work cycle.
 
@@ -176,16 +176,17 @@ Administrator bypass never applies to ownership, billing, security, or private m
 | P1-010 | verified    | Operator diagnostics and expanded audit log        | `auditEventSchema.action` expanded to cover membership, role, channel, and invite events; `targetType` enum covers all target categories; `recordAudit()` helper wired at 11 mutation sites; cursor-based paginated audit log endpoint; `GET /v1/communities/:id/stats` returning memberCount/channelCount/messageCount/onlineCount; `communityStatsSchema` contract; web client community header shows member count. | 86 tests pass (51 core + 15 contracts + 6 web + 14 desktop); strict typecheck; production build 87.90 kB gzip JS / 4.20 kB gzip CSS; format clean; 0 production vulnerabilities.                                                                                                                               |
 | P1-011 | verified    | Deployable web client configuration                | Same-origin production static serving; typed `VITE_API_URL`/`VITE_GATEWAY_URL` resolution; exact-origin default-deny CORS; non-root multi-stage container image; documented environment contract.                                                                                                                                                                                                                     | 94 tests pass (55 core + 15 contracts + 10 web + 14 desktop); strict typecheck; production build 88.20 kB gzip JS / 4.20 kB gzip CSS; format clean; production and full audits report 0 vulnerabilities. Container execution is blocked by the unavailable Docker Linux daemon.                                |
 | P1-012 | verified    | Voice-room media channels and permission gating   | Voice-room session schemas, stage/voice channel enum, MediaProvider interface, fake/LiveKit media providers, join/leave endpoints, automated room-switching, permission gating.                                                                                                                                                                                                                                | 97 tests pass (58 core + 15 contracts + 10 web + 14 desktop); typecheck and production build pass.                                                                                                                                                                                                             |
+| P1-013 | verified    | Voice participant event reconciliation            | `voiceParticipantJoinedSchema` and `voiceParticipantLeftSchema` in `@cove/contracts`; `reconcileVoiceJoin`/`reconcileVoiceLeave` in web client with idempotent add/remove semantics; `voice.participant.joined`/`voice.participant.left` gateway events update channel participant lists live; Join/Leave voice buttons wired to `POST /v1/channels/:channelId/voice/join|leave`; in-voice dock indicator in user footer. | 99 tests pass (58 core + 16 contracts + 11 web + 14 desktop); strict typecheck; production build 88.59 kB gzip JS / 4.20 kB gzip CSS; format clean (pre-existing warnings unchanged); 0 production vulnerabilities. |
 
 ## Quality dashboard
 
 | Area             | Current          | Gate                                                                                                                                                                                                           |
 | ---------------- | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Install          | verified         | `npm install` completed and generated a locked workspace graph.                                                                                                                                                |
-| Unit tests       | verified         | 97 tests pass: 10 web, 58 core, 15 contracts, 14 desktop (3 gate + 11 PTT), 0 ui.                                                                                                                              |
+| Unit tests       | verified         | 99 tests pass: 11 web, 58 core, 16 contracts, 14 desktop (3 gate + 11 PTT), 0 ui.                                                                                                                              |
 | Type safety      | verified         | All five workspaces pass strict TypeScript.                                                                                                                                                                    |
-| Production build | verified         | Client output is 88.20 kB gzip JavaScript and 4.20 kB gzip CSS; multi-stage non-root container definition is present.                                                                                          |
-| API integration  | verified         | Health, bootstrap, authenticated mutations, audit reads, community stats, read state, replies, attention, gateway, device sessions, production same-origin HTML/assets, and explicit endpoint resolution pass. |
+| Production build | verified         | Client output is 88.59 kB gzip JavaScript and 4.20 kB gzip CSS; multi-stage non-root container definition is present.                                                                                          |
+| API integration  | verified         | Health, bootstrap, authenticated mutations, audit reads, community stats, read state, replies, attention, presence, voice join/leave, bans, backup/restore, gateway, device sessions, production same-origin HTML/assets, and endpoint resolution pass. |
 | Accessibility    | partial          | Semantic UI tests and accessible modes exist; real-browser review remains blocked.                                                                                                                             |
 | Performance      | partial          | Electron renderer loaded in 2.392 s once; a 464 MB summed startup working-set snapshot signals risk. PTT harness UI added; warm/idle p95 and soak remain unmeasured.                                           |
 | Security         | baseline partial | CSP, headers, runtime schemas, redacted logs, metadata-only message audit events, exact-origin default-deny CORS, threat model, and 0 vulnerabilities in both dependency audits.                               |
@@ -206,6 +207,18 @@ Administrator bypass never applies to ownership, billing, security, or private m
 | UI becomes unstable or decorative               | Medium      | High     | Semantic design system, visual regression, density modes, measured navigation-change policy.                                                                                                    |
 
 ## Recent session checkpoints
+
+### Cycle 20 — 2026-06-30 — completed
+
+- Objective: add voice participant gateway event handling in the web client so real-time participant lists update without a page reload, and wire the voice Join/Leave buttons to the API.
+- Delivered: `voiceParticipantJoinedSchema` (channelId + participant) and `voiceParticipantLeftSchema` (channelId + participantId) added to `@cove/contracts`; exported types `VoiceParticipantJoined` and `VoiceParticipantLeft`.
+- Delivered: `reconcileVoiceJoin(channels, channelId, participant)` and `reconcileVoiceLeave(channels, channelId, participantId)` exported from `apps/web/src/App.tsx`; both are idempotent (duplicate joins do not add duplicate entries).
+- Delivered: gateway handler in App.tsx now handles `voice.participant.joined` and `voice.participant.left` events, updating `bootstrap.channels` participant lists in state.
+- Delivered: `joinVoice(channelId)` and `leaveVoice(channelId)` functions POST to the voice join/leave API with the session token when available; `activeVoiceChannelId` and `voiceSession` state track the user's current voice session.
+- Delivered: "Leave voice" / "Join voice" toggle in the voice channel focus area; in-voice indicator in the user dock footer showing the active channel name.
+- Delivered: voice participant contract test (`voiceParticipantJoinedSchema` / `voiceParticipantLeftSchema` validation) in `packages/contracts/src/protocol.test.ts`; voice reconcile test in `apps/web/src/App.test.tsx` covering join, idempotent join, leave, and non-voice channel isolation.
+- Verification: 99 tests pass (58 core + 16 contracts + 11 web + 14 desktop); all five workspaces pass strict TypeScript; production build 88.59 kB gzip JS / 4.20 kB gzip CSS; format clean (pre-existing `.claude/settings.local.json`, `media-provider.ts`, `app.test.ts` warnings unchanged); 0 production vulnerabilities.
+- Next: community data export (E-006 portability), web client audit log panel, PostgreSQL voice participant persistence, and desktop PTT integration.
 
 ### Cycle 19 — 2026-06-30 — completed
 
