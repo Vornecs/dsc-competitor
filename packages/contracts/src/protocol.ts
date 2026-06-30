@@ -76,6 +76,23 @@ export const messageAuthorSchema = accountSchema.pick({
   status: true,
 });
 
+export const attachmentSchema = z.object({
+  id: z.string().min(1),
+  filename: z.string().min(1).max(256),
+  mimeType: z.string().min(1).max(128),
+  size: z.number().int().nonnegative(),
+  quarantineStatus: z.enum(['pending', 'approved', 'rejected']),
+  createdAt: z.string().datetime(),
+});
+export type Attachment = z.infer<typeof attachmentSchema>;
+
+export const initiateUploadRequestSchema = z.object({
+  filename: z.string().min(1).max(256),
+  mimeType: z.string().min(1).max(128),
+  size: z.number().int().min(1).max(26_214_400),
+});
+export type InitiateUploadRequest = z.infer<typeof initiateUploadRequestSchema>;
+
 export const messageSchema = z.object({
   id: z.string().min(1),
   channelId: z.string().min(1),
@@ -91,6 +108,7 @@ export const messageSchema = z.object({
       reacted: z.boolean(),
     }),
   ),
+  attachments: z.array(attachmentSchema).default([]),
 });
 export type Message = z.infer<typeof messageSchema>;
 
@@ -118,6 +136,7 @@ export type BootstrapState = z.infer<typeof bootstrapStateSchema>;
 export const sendMessageRequestSchema = z.object({
   content: z.string().trim().min(1).max(4_000),
   clientNonce: z.string().min(8).max(128),
+  attachmentIds: z.array(z.string().min(1)).max(10).optional(),
 });
 export type SendMessageRequest = z.infer<typeof sendMessageRequestSchema>;
 

@@ -1145,3 +1145,172 @@ describe('invite API', () => {
     expect(acceptRes.statusCode).toBe(404);
   });
 });
+
+describe('attachment pipeline', () => {
+  async function getAuth(app: Awaited<ReturnType<typeof buildApp>>) {
+    const email = `user-${crypto.randomUUID()}@test.cove.chat`;
+    const sendRes = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/email/send-code',
+      payload: { email },
+    });
+    const { challengeId } = sendRes.json();
+    const verifyRes = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/email/verify',
+      payload: { email, code: '123456', challengeId },
+    });
+    return { token: verifyRes.json().sessionToken as string };
+  }
+
+  async function setupChannelAndAuth(app: Awaited<ReturnType<typeof buildApp>>) {
+    const { token } = await getAuth(app);
+    const communityRes = await app.inject({
+      method: 'POST',
+      url: '/v1/communities',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 'Media Guild' },
+    });
+    const communityId = communityRes.json().id;
+    const channelRes = await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/channels`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 'media', kind: 'text', category: 'Files' },
+    });
+    return { token, communityId, channelId: channelRes.json().id as string };
+  }
+
+  it('initiates an upload, uploads content, and serves the file', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const { token, channelId } = await setupChannelAndAuth(app);
+
+    const initiateRes = await app.inject({
+      method: 'POST',
+      url: `/v1/channels/${channelId}/attachments/initiate`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { filename: 'image.png', mimeType: 'image/png', size: 1024 },
+    });
+    expect(initiateRes.statusCode).toBe(201);
+    const { attachmentId } = initiateRes.json();
+    expect(attachmentId).toBeDefined();
+
+    const fileContent = Buffer.from('fake-png-bytes');
+    const uploadRes = await app.inject({
+      method: 'PUT',
+      url: `/v1/channels/${channelId}/attachments/${attachmentId}/upload`,
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/octet-stream' },
+      body: fileContent,
+    });
+    expect(uploadRes.statusCode).toBe(204);
+
+    const serveRes = await app.inject({
+      method: 'GET',
+      url: `/v1/attachments/${attachmentId}/content`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(serveRes.statusCode).toBe(200);
+    expect(serveRes.headers['content-type']).toContain('image/png');
+    expect(serveRes.rawPayload).toEqual(fileContent);
+  });
+
+  it('rejects upload initiation for unsupported MIME type', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const { token, channelId } = await setupChannelAndAuth(app);
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/v1/channels/${channelId}/attachments/initiate`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { filename: 'malware.exe', mimeType: 'application/x-msdownload', size: 512 },
+    });
+    expect(res.statusCode).toBe(415);
+    expect(res.headers['content-type']).toContain('application/problem+json');
+  });
+
+  it('rejects upload initiation when file size exceeds 25 MB', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const { token, channelId } = await setupChannelAndAuth(app);
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/v1/channels/${channelId}/attachments/initiate`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { filename: 'huge.mp4', mimeType: 'video/mp4', size: 30_000_000 },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('rejects duplicate upload of the same attachment', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const { token, channelId } = await setupChannelAndAuth(app);
+
+    const { attachmentId } = (
+      await app.inject({
+        method: 'POST',
+        url: `/v1/channels/${channelId}/attachments/initiate`,
+        headers: { authorization: `Bearer ${token}` },
+        payload: { filename: 'doc.pdf', mimeType: 'application/pdf', size: 256 },
+      })
+    ).json();
+
+    const body = Buffer.from('pdf-content');
+    await app.inject({
+      method: 'PUT',
+      url: `/v1/channels/${channelId}/attachments/${attachmentId}/upload`,
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/octet-stream' },
+      body,
+    });
+
+    const dup = await app.inject({
+      method: 'PUT',
+      url: `/v1/channels/${channelId}/attachments/${attachmentId}/upload`,
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/octet-stream' },
+      body,
+    });
+    expect(dup.statusCode).toBe(409);
+  });
+
+  it('sends a message with an attachment and returns resolved attachment metadata', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const { token, channelId } = await setupChannelAndAuth(app);
+
+    const { attachmentId } = (
+      await app.inject({
+        method: 'POST',
+        url: `/v1/channels/${channelId}/attachments/initiate`,
+        headers: { authorization: `Bearer ${token}` },
+        payload: { filename: 'screenshot.png', mimeType: 'image/png', size: 2048 },
+      })
+    ).json();
+
+    await app.inject({
+      method: 'PUT',
+      url: `/v1/channels/${channelId}/attachments/${attachmentId}/upload`,
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/octet-stream' },
+      body: Buffer.from('png-data'),
+    });
+
+    const msgRes = await app.inject({
+      method: 'POST',
+      url: `/v1/channels/${channelId}/messages`,
+      headers: { authorization: `Bearer ${token}`, 'idempotency-key': 'att-msg-001' },
+      payload: {
+        content: 'Here is my screenshot',
+        clientNonce: 'nonce-att-001',
+        attachmentIds: [attachmentId],
+      },
+    });
+    expect(msgRes.statusCode).toBe(201);
+    const msg = msgRes.json();
+    expect(msg.attachments).toHaveLength(1);
+    expect(msg.attachments[0].id).toBe(attachmentId);
+    expect(msg.attachments[0].filename).toBe('screenshot.png');
+    expect(msg.attachments[0].quarantineStatus).toBe('approved');
+  });
+});

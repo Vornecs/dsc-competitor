@@ -6,6 +6,7 @@
 
 import type { Account, Channel, Community, Invite, Message, Role } from '@cove/contracts';
 import type {
+  AttachmentRecord,
   EmailChallenge,
   Membership,
   PasskeyCredential,
@@ -26,6 +27,7 @@ export function createMemoryRepository(): Repository {
   const invitesByCode = new Map<string, Invite>();
   const messages: Message[] = [];
   const idempotency = new Map<string, Message>();
+  const attachments = new Map<string, AttachmentRecord>();
 
   return {
     // -- Accounts -----------------------------------------------------------
@@ -233,6 +235,30 @@ export function createMemoryRepository(): Repository {
     },
     async setIdempotentMessage(key, message) {
       idempotency.set(key, message);
+    },
+
+    // -- Attachments ----------------------------------------------------------
+    async getAttachment(id) {
+      return attachments.get(id);
+    },
+    async addAttachment(attachment) {
+      attachments.set(attachment.id, { ...attachment });
+    },
+    async updateAttachmentStatus(id, status, uploadedAt) {
+      const record = attachments.get(id);
+      if (record) {
+        record.quarantineStatus = status;
+        if (uploadedAt) record.uploadedAt = uploadedAt;
+      }
+    },
+    async getAttachmentsByIds(ids) {
+      return ids.flatMap((id) => {
+        const rec = attachments.get(id);
+        return rec ? [rec] : [];
+      });
+    },
+    async deleteAttachment(id) {
+      attachments.delete(id);
     },
   };
 }

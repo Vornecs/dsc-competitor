@@ -9,6 +9,7 @@
 import type { Account, Channel, Community, Invite, Message, Role } from '@cove/contracts';
 import type { Pool, PoolClient, QueryResultRow } from 'pg';
 import type {
+  AttachmentRecord,
   EmailChallenge,
   Membership,
   PasskeyCredential,
@@ -505,5 +506,88 @@ export function createPostgresRepository(pool: Pool): Repository {
         [key, message.id, JSON.stringify(message)],
       );
     },
+
+    // -- Attachments --------------------------------------------------------
+
+    async getAttachment(id) {
+      const row = await queryOne<AttachmentRow>('SELECT * FROM attachments WHERE id = $1', [id]);
+      return row ? rowToAttachment(row) : undefined;
+    },
+
+    async addAttachment(attachment) {
+      await pool.query(
+        `INSERT INTO attachments
+           (id, channel_id, uploader_id, filename, mime_type, size, storage_key,
+            quarantine_status, uploaded_at, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+         ON CONFLICT (id) DO NOTHING`,
+        [
+          attachment.id,
+          attachment.channelId,
+          attachment.uploaderAccountId,
+          attachment.filename,
+          attachment.mimeType,
+          attachment.size,
+          attachment.storageKey,
+          attachment.quarantineStatus,
+          attachment.uploadedAt ?? null,
+          attachment.createdAt,
+        ],
+      );
+    },
+
+    async updateAttachmentStatus(id, status, uploadedAt) {
+      await pool.query(
+        `UPDATE attachments SET quarantine_status = $2, uploaded_at = COALESCE($3::timestamptz, uploaded_at)
+         WHERE id = $1`,
+        [id, status, uploadedAt ?? null],
+      );
+    },
+
+    async getAttachmentsByIds(ids) {
+      if (ids.length === 0) return [];
+      const placeholders = ids.map((_, i) => `$${i + 1}`).join(', ');
+      const rows = await query<AttachmentRow>(
+        `SELECT * FROM attachments WHERE id IN (${placeholders})`,
+        ids,
+      );
+      return rows.map(rowToAttachment);
+    },
+
+    async deleteAttachment(id) {
+      await pool.query('DELETE FROM attachments WHERE id = $1', [id]);
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Row helpers
+// ---------------------------------------------------------------------------
+
+interface AttachmentRow extends QueryResultRow {
+  id: string;
+  channel_id: string;
+  uploader_id: string;
+  filename: string;
+  mime_type: string;
+  size: string; // bigint arrives as string
+  storage_key: string;
+  quarantine_status: 'pending' | 'approved' | 'rejected';
+  uploaded_at: string | null;
+  created_at: string;
+}
+
+function rowToAttachment(row: AttachmentRow): AttachmentRecord {
+  return {
+    id: row.id,
+    channelId: row.channel_id,
+    uploaderAccountId: row.uploader_id,
+    filename: row.filename,
+    mimeType: row.mime_type,
+    size: Number(row.size),
+    storageKey: row.storage_key,
+    quarantineStatus: row.quarantine_status,
+    createdAt: row.created_at,
+    ...(row.uploaded_at ? { uploadedAt: row.uploaded_at } : {}),
   };
 }

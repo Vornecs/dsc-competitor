@@ -133,6 +133,7 @@ export const demoBootstrap: BootstrapState = {
       createdAt: '2026-06-29T19:12:00.000Z',
       editedAt: null,
       reactions: [{ emoji: '✓', count: 4, reacted: true }],
+      attachments: [],
     },
     {
       id: 'message-2',
@@ -143,6 +144,7 @@ export const demoBootstrap: BootstrapState = {
       createdAt: '2026-06-29T19:18:00.000Z',
       editedAt: null,
       reactions: [],
+      attachments: [],
     },
     {
       id: 'message-3',
@@ -153,6 +155,7 @@ export const demoBootstrap: BootstrapState = {
       createdAt: '2026-06-29T19:27:00.000Z',
       editedAt: null,
       reactions: [{ emoji: '＋1', count: 3, reacted: false }],
+      attachments: [],
     },
   ],
   attention: [

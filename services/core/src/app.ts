@@ -8,6 +8,7 @@ import {
   gatewayClientFrameSchema,
   messageSchema,
   sendMessageRequestSchema,
+  initiateUploadRequestSchema,
   emailLoginRequestSchema,
   emailVerifyRequestSchema,
   passkeyRegisterVerifySchema,
@@ -19,6 +20,7 @@ import {
   createInviteRequestSchema,
   permissionSimulatorRequestSchema,
   resolvePermission,
+  type Attachment,
   type BootstrapState,
   type EventEnvelope,
   type GatewayServerFrame,
@@ -33,6 +35,8 @@ import {
   type Role,
   type Invite,
 } from '@cove/contracts';
+import type { ObjectStorage } from './object-storage.js';
+import { createMemoryObjectStorage } from './object-storage.js';
 import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify';
 import type { WebSocket } from 'ws';
 import type { Membership, Repository } from './repository.js';
@@ -190,14 +194,35 @@ class GatewayHub {
   }
 }
 
+const ALLOWED_MIME_TYPES = new Set([
+  'image/jpeg',
+  'image/png',
+  'image/gif',
+  'image/webp',
+  'image/avif',
+  'video/mp4',
+  'video/webm',
+  'audio/mpeg',
+  'audio/ogg',
+  'audio/wav',
+  'audio/flac',
+  'audio/aac',
+  'application/pdf',
+  'application/zip',
+  'text/plain',
+]);
+const MAX_ATTACHMENT_BYTES = 26_214_400; // 25 MB
+
 export interface BuildAppOptions {
   repo?: Repository;
   coordinator?: GatewayCoordinator;
+  storage?: ObjectStorage;
 }
 
 export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInstance> {
   const repo = opts.repo ?? createMemoryRepository();
   const coordinator = opts.coordinator ?? createMemoryGatewayCoordinator();
+  const storage = opts.storage ?? createMemoryObjectStorage();
   const app = Fastify({
     logger: {
       level: process.env.LOG_LEVEL ?? 'info',
@@ -345,6 +370,20 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
   await app.register(cors, { origin: true, credentials: false });
   await app.register(helmet, { contentSecurityPolicy: false });
   await app.register(websocket);
+
+  // Binary content type parsers for raw file uploads
+  for (const mimeType of ALLOWED_MIME_TYPES) {
+    app.addContentTypeParser(mimeType, { parseAs: 'buffer' }, (_req, body, done) => {
+      done(null, body);
+    });
+  }
+  app.addContentTypeParser(
+    'application/octet-stream',
+    { parseAs: 'buffer' },
+    (_req, body, done) => {
+      done(null, body);
+    },
+  );
 
   const currentBootstrap = async (): Promise<BootstrapState> => {
     const bootstrapMessages: Message[] = [];
@@ -804,6 +843,51 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
       const existing = await repo.getIdempotentMessage(scopedIdempotencyKey);
       if (existing) return reply.code(200).send(existing);
 
+      // Resolve attachment IDs to approved attachment objects
+      const attachmentIds = parsed.data.attachmentIds ?? [];
+      let resolvedAttachments: Attachment[] = [];
+      if (attachmentIds.length > 0) {
+        const records = await repo.getAttachmentsByIds(attachmentIds);
+        const missing = attachmentIds.filter((id) => !records.find((r) => r.id === id));
+        if (missing.length > 0) {
+          return problem(
+            reply,
+            400,
+            'Invalid attachment',
+            `Attachment(s) not found: ${missing.join(', ')}`,
+            request.url,
+          );
+        }
+        const notApproved = records.filter((r) => r.quarantineStatus !== 'approved');
+        if (notApproved.length > 0) {
+          return problem(
+            reply,
+            400,
+            'Attachment not ready',
+            'One or more attachments have not been uploaded or are pending review.',
+            request.url,
+          );
+        }
+        const wrongChannel = records.filter((r) => r.channelId !== channel.id);
+        if (wrongChannel.length > 0) {
+          return problem(
+            reply,
+            400,
+            'Invalid attachment',
+            'Attachments must belong to the target channel.',
+            request.url,
+          );
+        }
+        resolvedAttachments = records.map((r) => ({
+          id: r.id,
+          filename: r.filename,
+          mimeType: r.mimeType,
+          size: r.size,
+          quarantineStatus: r.quarantineStatus,
+          createdAt: r.createdAt,
+        }));
+      }
+
       const message = messageSchema.parse({
         id: crypto.randomUUID(),
         channelId: channel.id,
@@ -813,6 +897,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
         createdAt: new Date().toISOString(),
         editedAt: null,
         reactions: [],
+        attachments: resolvedAttachments,
       });
       await repo.addMessage(message);
       await repo.setIdempotentMessage(scopedIdempotencyKey, message);
@@ -824,6 +909,209 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
         dynamicChannel ? await messageAudience(channel.communityId, 'message.read') : undefined,
       );
       return reply.code(201).send(message);
+    },
+  );
+
+  // Attachments
+  app.post<{ Params: { channelId: string } }>(
+    '/v1/channels/:channelId/attachments/initiate',
+    async (request, reply) => {
+      const ok = await requireAuth(request, reply);
+      if (!ok) return;
+
+      const parsed = initiateUploadRequestSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return problem(
+          reply,
+          400,
+          'Invalid request',
+          parsed.error.issues.map((issue) => issue.message).join('; '),
+          request.url,
+        );
+      }
+
+      const { filename, mimeType, size } = parsed.data;
+
+      if (!ALLOWED_MIME_TYPES.has(mimeType)) {
+        return problem(
+          reply,
+          415,
+          'Unsupported media type',
+          `The MIME type "${mimeType}" is not permitted. Allowed types: images, video/mp4, video/webm, audio, application/pdf, application/zip, text/plain.`,
+          request.url,
+        );
+      }
+
+      if (size > MAX_ATTACHMENT_BYTES) {
+        return problem(
+          reply,
+          413,
+          'Payload too large',
+          `File size ${size} exceeds the 25 MB limit.`,
+          request.url,
+        );
+      }
+
+      const { account: actor } = (request as any).user;
+      const channel = await repo.findChannelById(request.params.channelId);
+      if (!channel) {
+        return problem(
+          reply,
+          404,
+          'Channel not found',
+          'The requested channel does not exist.',
+          request.url,
+        );
+      }
+      const membership = await requireMembership(reply, channel.communityId, actor.id, request.url);
+      if (!membership) return;
+      const permission = await requirePermission(
+        reply,
+        channel.communityId,
+        membership,
+        actor.id,
+        'message.send',
+        request.url,
+      );
+      if (!permission) return;
+
+      const attachmentId = `att-${crypto.randomUUID()}`;
+      const storageKey = `${channel.communityId}/${request.params.channelId}/${attachmentId}`;
+      const now = new Date().toISOString();
+      await repo.addAttachment({
+        id: attachmentId,
+        channelId: request.params.channelId,
+        uploaderAccountId: actor.id,
+        filename,
+        mimeType,
+        size,
+        storageKey,
+        quarantineStatus: 'pending',
+        createdAt: now,
+      });
+
+      return reply.code(201).send({ attachmentId });
+    },
+  );
+
+  app.put<{ Params: { channelId: string; attachmentId: string } }>(
+    '/v1/channels/:channelId/attachments/:attachmentId/upload',
+    { config: { rawBody: true } },
+    async (request, reply) => {
+      const ok = await requireAuth(request, reply);
+      if (!ok) return;
+
+      const { account: actor } = (request as any).user;
+      const attachment = await repo.getAttachment(request.params.attachmentId);
+      if (!attachment) {
+        return problem(
+          reply,
+          404,
+          'Attachment not found',
+          'Attachment record not found.',
+          request.url,
+        );
+      }
+      if (attachment.channelId !== request.params.channelId) {
+        return problem(
+          reply,
+          404,
+          'Attachment not found',
+          'Attachment does not belong to this channel.',
+          request.url,
+        );
+      }
+      if (attachment.uploaderAccountId !== actor.id) {
+        return problem(
+          reply,
+          403,
+          'Forbidden',
+          'Only the original uploader may upload this attachment.',
+          request.url,
+        );
+      }
+      if (attachment.uploadedAt) {
+        return problem(
+          reply,
+          409,
+          'Already uploaded',
+          'This attachment has already been uploaded.',
+          request.url,
+        );
+      }
+
+      const body = request.body as Buffer;
+      if (!Buffer.isBuffer(body) || body.length === 0) {
+        return problem(
+          reply,
+          400,
+          'Empty body',
+          'Upload body must be non-empty binary content.',
+          request.url,
+        );
+      }
+      if (body.length > MAX_ATTACHMENT_BYTES) {
+        return problem(
+          reply,
+          413,
+          'Payload too large',
+          `Upload exceeds the 25 MB limit.`,
+          request.url,
+        );
+      }
+
+      await storage.put(attachment.storageKey, body, attachment.mimeType);
+      const uploadedAt = new Date().toISOString();
+      await repo.updateAttachmentStatus(attachment.id, 'approved', uploadedAt);
+
+      return reply.code(204).send();
+    },
+  );
+
+  app.get<{ Params: { attachmentId: string } }>(
+    '/v1/attachments/:attachmentId/content',
+    async (request, reply) => {
+      const ok = await requireAuth(request, reply);
+      if (!ok) return;
+
+      const attachment = await repo.getAttachment(request.params.attachmentId);
+      if (!attachment) {
+        return problem(reply, 404, 'Attachment not found', 'Attachment not found.', request.url);
+      }
+      if (attachment.quarantineStatus !== 'approved') {
+        return problem(
+          reply,
+          451,
+          'Unavailable for legal reasons',
+          'This attachment is not available.',
+          request.url,
+        );
+      }
+
+      const { account: actor } = (request as any).user;
+      const channel = await repo.findChannelById(attachment.channelId);
+      if (!channel) {
+        return problem(reply, 404, 'Channel not found', 'Channel not found.', request.url);
+      }
+      const membership = await requireMembership(reply, channel.communityId, actor.id, request.url);
+      if (!membership) return;
+
+      const data = await storage.get(attachment.storageKey);
+      if (!data) {
+        return problem(
+          reply,
+          404,
+          'Content not found',
+          'Attachment content is missing from storage.',
+          request.url,
+        );
+      }
+
+      return reply
+        .header('content-type', attachment.mimeType)
+        .header('content-disposition', `inline; filename="${attachment.filename}"`)
+        .code(200)
+        .send(data);
     },
   );
 

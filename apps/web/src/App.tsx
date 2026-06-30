@@ -181,6 +181,7 @@ export function App() {
       createdAt: new Date().toISOString(),
       editedAt: null,
       reactions: [],
+      attachments: [],
     };
     setMessages((current) => [...current, optimistic]);
 

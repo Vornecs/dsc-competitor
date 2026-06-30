@@ -1,10 +1,10 @@
 # Cove Product Plan
 
-> Last updated: 2026-06-29 | Cycle: 10 | Phase: 1 — Core Features | Build health: verified; Redis coordination layer wired with graceful fallback
+> Last updated: 2026-06-29 | Cycle: 11 | Phase: 1 — Core Features | Build health: verified; attachment pipeline live with upload/quarantine/serve
 >
-> Current objective: Cycle 10 wired Redis gateway coordinator for cluster-wide event sequencing and session state persistence. Redis is available via `REDIS_URL=redis://localhost:6379` from docker-compose.yml, with automatic fallback to in-memory coordinator when Redis is unavailable.
+> Current objective: Cycle 11 delivered the attachment pipeline — two-phase upload (initiate + upload), per-MIME allowlist validation, quarantine status tracking (auto-approve in dev), binary serve endpoint, and message attachment resolution.
 >
-> Next gate: begin the attachment pipeline (managed messages with file uploads, quarantine, and S3-compatible storage).
+> Next gate: managed message edits, deletes, reactions, read-state tracking, and audit event log.
 
 This file is the authoritative product, architecture, and delivery record. A behavior or scope change is incomplete until this file is reconciled in the same work cycle.
 
@@ -164,15 +164,16 @@ Administrator bypass never applies to ownership, billing, security, or private m
 | P1-002 | verified    | Communities, channels, memberships, roles, invites | Community CRUD, channel CRUD within communities, join/leave membership, role CRUD, invite creation/management, owner-leave guard, permission simulator endpoint. | 26 core tests pass: community create/list/get, membership join/leave, channel create/list, role CRUD, invite create/list/join, permission simulator precedence/owner-only. Typecheck, build, format clean. 0 production vulns.                                                                                 |
 | P1-003 | verified    | Permission-dependent message routing               | Authenticated message reads/writes filtered by channel permissions and role assignments.                                                                         | Message read/write tests with permission enforcement; 26 core tests pass, message read/write gated by permission engine and roles.                                                                                                                                                                             |
 | P1-004 | implemented | PostgreSQL persistence                             | Initial PostgreSQL schema (10 tables), pg-based repository adapter, DATABASE_URL-driven repository selection, docker-compose for local dev.                      | 54 tests pass (10 contracts + 14 desktop + 4 web + 26 core); typecheck, build (86.41 kB gzip), and format clean. Repository interface is fully async; memory adapter remains default for tests; postgres adapter activated via DATABASE_URL env.                                                               |
+| P1-005 | verified    | Attachment pipeline                                | Two-phase upload (initiate metadata → PUT raw body), per-MIME allowlist (images, video/mp4/webm, audio, pdf, zip, text), 25 MB cap, quarantine status (auto-approve in dev), binary serve endpoint, message `attachmentIds` resolution, PostgreSQL migration 002. | 64 tests pass (36 core + 10 contracts + 4 web + 14 desktop); strict typecheck, build 86.49 kB gzip, format clean, 0 production vulns. 5 new attachment tests covering initiate/upload/serve/duplicate/message-resolution.                                      |
 
 ## Quality dashboard
 
 | Area             | Current          | Gate                                                                                                                                                                    |
 | ---------------- | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Install          | verified         | `npm install` completed and generated a locked workspace graph.                                                                                                         |
-| Unit tests       | verified         | 54 tests pass: 4 web, 26 core, 10 contracts, 14 desktop (3 gate + 11 PTT), 0 ui.                                                                                        |
+| Unit tests       | verified         | 64 tests pass: 4 web, 36 core, 10 contracts, 14 desktop (3 gate + 11 PTT), 0 ui.                                                                                        |
 | Type safety      | verified         | All five workspaces pass strict TypeScript.                                                                                                                             |
-| Production build | verified         | Client output is 86.41 kB gzip JavaScript and 4.20 kB gzip CSS.                                                                                                         |
+| Production build | verified         | Client output is 86.49 kB gzip JavaScript and 4.20 kB gzip CSS.                                                                                                         |
 | API integration  | verified         | Health, bootstrap, authenticated community/role/invite mutations, permission simulator, gateway, device sessions, integrated HTML, and assets pass.                     |
 | Accessibility    | partial          | Semantic UI tests and accessible modes exist; real-browser review remains blocked.                                                                                      |
 | Performance      | partial          | Electron renderer loaded in 2.392 s once; a 464 MB summed startup working-set snapshot signals risk. PTT harness UI added; warm/idle p95 and soak remain unmeasured.    |
@@ -272,6 +273,18 @@ Administrator bypass never applies to ownership, billing, security, or private m
 - Known dependency blocker: the full audit still reports 5 high-severity build-time `tar` dependency findings through `electron-rebuild`; the available forced fix is a breaking downgrade and was not applied. Runtime production dependencies remain clean.
 - External blockers unchanged: participant research, LiveKit credentials, interactive Windows media/PTT measurements, Tauri toolchain approval, code signing, browser-policy QA, and external legal/security review.
 - Exact next task: add an initial PostgreSQL schema/migration and storage interfaces for accounts, sessions, communities, memberships, channels, roles, role assignments, and invites; migrate the current routes behind repository adapters while keeping an in-memory adapter for deterministic tests.
+
+### Cycle 11 — 2026-06-29 — completed
+
+- Objective: implement the attachment pipeline — file upload initiation, raw-body upload, quarantine tracking, serve endpoint, and message attachment resolution.
+- Delivered: `attachmentSchema` and `initiateUploadRequestSchema` in `@cove/contracts`; `attachments: []` field on `messageSchema` and optional `attachmentIds` on `sendMessageRequestSchema`; `attachments` field added to demo messages and web client optimistic message.
+- Delivered: `services/core/src/object-storage.ts` — `ObjectStorage` interface, `createMemoryObjectStorage()` (Map-backed, for tests), and `createLocalObjectStorage(dir)` (fs-backed, for single-node dev).
+- Delivered: `AttachmentRecord` type and five attachment methods added to `Repository` interface, `MemoryRepository`, and `PostgresRepository`; `services/core/schema/002_attachments.sql` migration.
+- Delivered: three new authenticated endpoints — `POST /v1/channels/:channelId/attachments/initiate` (validates MIME type and 25 MB cap, creates pending record), `PUT /v1/channels/:channelId/attachments/:attachmentId/upload` (raw binary body, auto-approves in dev), `GET /v1/attachments/:attachmentId/content` (serves approved file with correct Content-Type).
+- Delivered: message send updated to resolve `attachmentIds` into approved attachment objects and embed them in the created message.
+- Architecture: auto-approve quarantine path (`'pending' → 'approved'`) is the default. Quarantine can be enforced by a future moderation hook without changing the route contract.
+- Verification: 64 tests pass (36 core + 10 contracts + 4 web + 14 desktop); strict typecheck across all 5 workspaces; production build 86.49 kB gzip JS / 4.20 kB gzip CSS; Prettier clean; 0 production vulnerabilities. 5 new attachment tests: initiate/upload/serve roundtrip, bad MIME rejection, oversized rejection, duplicate-upload 409, and message-with-attachment resolution.
+- Next: message edits, deletes, reactions, read-state tracking, and audit event log (Phase 1 roadmap).
 
 ### Cycle 10 — 2026-06-29 — completed
 

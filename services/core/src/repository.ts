@@ -34,6 +34,19 @@ export interface PasskeyCredential {
   clientDataJSON: string;
 }
 
+export interface AttachmentRecord {
+  id: string;
+  channelId: string;
+  uploaderAccountId: string;
+  filename: string;
+  mimeType: string;
+  size: number;
+  storageKey: string;
+  quarantineStatus: 'pending' | 'approved' | 'rejected';
+  createdAt: string;
+  uploadedAt?: string;
+}
+
 export interface EmailChallenge {
   code: string;
   challengeId: string;
@@ -109,4 +122,15 @@ export interface Repository {
   addMessage(message: Message): Promise<void>;
   getIdempotentMessage(key: string): Promise<Message | undefined>;
   setIdempotentMessage(key: string, message: Message): Promise<void>;
+
+  // -- Attachments ----------------------------------------------------------
+  getAttachment(id: string): Promise<AttachmentRecord | undefined>;
+  addAttachment(attachment: AttachmentRecord): Promise<void>;
+  updateAttachmentStatus(
+    id: string,
+    status: 'pending' | 'approved' | 'rejected',
+    uploadedAt?: string,
+  ): Promise<void>;
+  getAttachmentsByIds(ids: string[]): Promise<AttachmentRecord[]>;
+  deleteAttachment(id: string): Promise<void>;
 }
