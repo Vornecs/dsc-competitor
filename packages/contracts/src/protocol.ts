@@ -537,3 +537,15 @@ export const banMemberRequestSchema = z.object({
   reason: z.string().max(512).optional(),
 });
 export type BanMemberRequest = z.infer<typeof banMemberRequestSchema>;
+
+export const communityExportSchema = z.object({
+  version: z.literal(1),
+  exportedAt: z.string().datetime(),
+  community: communitySchema,
+  channels: z.array(channelSchema),
+  roles: z.array(roleSchema),
+  memberCount: z.number().int().nonnegative(),
+  messages: z.array(messageSchema),
+  inviteCount: z.number().int().nonnegative(),
+});
+export type CommunityExport = z.infer<typeof communityExportSchema>;

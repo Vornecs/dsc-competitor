@@ -5,6 +5,7 @@ import { demoBootstrap } from '@cove/contracts';
 import {
   App,
   reconcileAttentionItem,
+  reconcileAuditLog,
   reconcileMessageUpdate,
   reconcileReactionUpdate,
   reconcileSavedMessage,
@@ -82,6 +83,39 @@ describe('application shell', () => {
 
     expect(reconcileAttentionItem([existing], reply)).toEqual([reply, existing]);
     expect(reconcileAttentionItem([reply, existing], reply)).toEqual([reply, existing]);
+  });
+
+  it('renders the audit log toggle button in the community nav', () => {
+    render(<App />);
+    expect(screen.getByRole('button', { name: 'Open audit log' })).toBeInTheDocument();
+  });
+
+  it('shows the audit log panel when toggled open', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole('button', { name: 'Open audit log' }));
+    expect(screen.getByRole('region', { name: 'Audit log' })).toBeInTheDocument();
+    expect(screen.getByText('No audit events yet.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Close audit log' })).toBeInTheDocument();
+  });
+
+  it('merges audit event pages without duplicating entries', () => {
+    const baseEvent = {
+      id: 'audit-1',
+      communityId: 'community-ember',
+      actorId: 'account-mara',
+      action: 'channel.created' as const,
+      targetType: 'channel' as const,
+      targetId: 'channel-campfire',
+      metadata: {},
+      createdAt: new Date().toISOString(),
+    };
+    const secondEvent = { ...baseEvent, id: 'audit-2', action: 'member.joined' as const };
+
+    expect(reconcileAuditLog([baseEvent], [baseEvent, secondEvent])).toHaveLength(2);
+    expect(reconcileAuditLog([baseEvent], [secondEvent])).toEqual([baseEvent, secondEvent]);
+    expect(reconcileAuditLog([], [baseEvent, baseEvent])).toEqual([baseEvent]);
+    expect(reconcileAuditLog([], [])).toEqual([]);
   });
 
   it('reconciles voice participant join and leave events', () => {

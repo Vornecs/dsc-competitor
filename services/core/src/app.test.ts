@@ -2423,3 +2423,125 @@ describe('voice room API', () => {
     expect(joinRes.statusCode).toBe(403);
   });
 });
+
+describe('community data export', () => {
+  async function getAuth(app: Awaited<ReturnType<typeof buildApp>>) {
+    const email = `user-${crypto.randomUUID()}@test.cove.chat`;
+    const sendRes = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/email/send-code',
+      payload: { email },
+    });
+    const { challengeId } = sendRes.json();
+    const verifyRes = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/email/verify',
+      payload: { email, code: '123456', challengeId },
+    });
+    const data = verifyRes.json();
+    return { token: data.sessionToken as string, account: data.account as { id: string } };
+  }
+
+  it('allows the community owner to export community data', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const { token: ownerToken } = await getAuth(app);
+
+    const communityRes = await app.inject({
+      method: 'POST',
+      url: '/v1/communities',
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { name: 'Export Test Community' },
+    });
+    const communityId = communityRes.json().id as string;
+
+    const channelRes = await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/channels`,
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { name: 'general', kind: 'text', category: 'Text' },
+    });
+    const messageRes = await app.inject({
+      method: 'POST',
+      url: `/v1/channels/${channelRes.json().id}/messages`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        'idempotency-key': 'community-export-message-1',
+      },
+      payload: { content: 'Portable community history', clientNonce: 'community-export-message-1' },
+    });
+    expect(messageRes.statusCode).toBe(201);
+
+    const exportRes = await app.inject({
+      method: 'GET',
+      url: `/v1/communities/${communityId}/export`,
+      headers: { authorization: `Bearer ${ownerToken}` },
+    });
+
+    expect(exportRes.statusCode, exportRes.body).toBe(200);
+    expect(exportRes.headers['content-disposition']).toContain('attachment');
+    expect(exportRes.headers['content-type']).toContain('application/json');
+
+    const body = exportRes.json() as {
+      version: number;
+      community: { id: string };
+      channels: Array<{ name: string }>;
+      memberCount: number;
+      messages: Array<{ content: string }>;
+      inviteCount: number;
+    };
+    expect(body.version).toBe(1);
+    expect(body.community.id).toBe(communityId);
+    expect(body.channels.some((c) => c.name === 'general')).toBe(true);
+    expect(typeof body.memberCount).toBe('number');
+    expect(body.messages.map((message) => message.content)).toContain('Portable community history');
+    expect(typeof body.inviteCount).toBe('number');
+  });
+
+  it('denies non-owner members from exporting community data', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const { token: ownerToken } = await getAuth(app);
+    const { token: memberToken } = await getAuth(app);
+
+    const communityRes = await app.inject({
+      method: 'POST',
+      url: '/v1/communities',
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { name: 'Export Guard Community' },
+    });
+    const communityId = communityRes.json().id as string;
+
+    await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/join`,
+      headers: { authorization: `Bearer ${memberToken}` },
+    });
+
+    const exportRes = await app.inject({
+      method: 'GET',
+      url: `/v1/communities/${communityId}/export`,
+      headers: { authorization: `Bearer ${memberToken}` },
+    });
+    expect(exportRes.statusCode).toBe(403);
+  });
+
+  it('returns 401 for unauthenticated export requests', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const { token } = await getAuth(app);
+    const communityRes = await app.inject({
+      method: 'POST',
+      url: '/v1/communities',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 'Auth Guard Community' },
+    });
+    const communityId = communityRes.json().id as string;
+
+    const exportRes = await app.inject({
+      method: 'GET',
+      url: `/v1/communities/${communityId}/export`,
+    });
+    expect(exportRes.statusCode).toBe(401);
+  });
+});

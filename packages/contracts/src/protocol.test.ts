@@ -3,6 +3,7 @@ import {
   channelPrivacyPolicySchema,
   channelSchema,
   communityStatsSchema,
+  communityExportSchema,
   createInviteRequestSchema,
   createRoleRequestSchema,
   auditEventSchema,
@@ -309,6 +310,39 @@ describe('presence contracts', () => {
       status: 'offline',
     });
     expect(missingFields.success).toBe(false);
+  });
+});
+
+describe('community export contract', () => {
+  it('validates a minimal community export bundle', () => {
+    const channel = demoBootstrap.channels[0]!;
+    const community = demoBootstrap.communities[0]!;
+    const result = communityExportSchema.safeParse({
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      community,
+      channels: [channel],
+      roles: [],
+      memberCount: 3,
+      messages: [],
+      inviteCount: 0,
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects export bundles with wrong version', () => {
+    const community = demoBootstrap.communities[0]!;
+    const result = communityExportSchema.safeParse({
+      version: 2,
+      exportedAt: new Date().toISOString(),
+      community,
+      channels: [],
+      roles: [],
+      memberCount: 0,
+      messages: [],
+      inviteCount: 0,
+    });
+    expect(result.success).toBe(false);
   });
 });
 

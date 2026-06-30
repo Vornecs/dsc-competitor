@@ -29,6 +29,7 @@ import {
   communityStatsSchema,
   banMemberRequestSchema,
   banSchema,
+  communityExportSchema,
   type Attachment,
   type AttentionItem,
   type BootstrapState,
@@ -50,6 +51,7 @@ import {
   type Ban,
   type Participant,
   type VoiceSession,
+  type CommunityExport,
 } from '@cove/contracts';
 import type { ObjectStorage } from './object-storage.js';
 import { createMemoryObjectStorage } from './object-storage.js';
@@ -3049,6 +3051,62 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
       if (frame.data.op === 'HEARTBEAT') await hub.heartbeat(socket);
     });
   });
+
+  // Community data export (E-006 portability — owner only)
+  app.get<{ Params: { communityId: string } }>(
+    '/v1/communities/:communityId/export',
+    async (request, reply) => {
+      const ok = await requireAuth(request, reply);
+      if (!ok) return;
+      const { account: actor } = (request as any).user as { account: Account };
+      const community = await repo.getCommunity(request.params.communityId);
+      if (!community) {
+        return problem(
+          reply,
+          404,
+          'Community not found',
+          'The requested community does not exist.',
+          request.url,
+        );
+      }
+      const membership = await requireMembership(reply, community.id, actor.id, request.url);
+      if (!membership) return;
+      if (membership.role !== 'owner') {
+        return problem(
+          reply,
+          403,
+          'Forbidden',
+          'Only the community owner may export community data.',
+          request.url,
+        );
+      }
+      const [channels, roles, members, invites] = await Promise.all([
+        repo.getChannelsByCommunity(community.id),
+        repo.getRolesByCommunity(community.id),
+        repo.getMemberships(community.id),
+        repo.getInvitesByCommunity(community.id),
+      ]);
+      const allMessages = (
+        await Promise.all(channels.map((ch) => repo.getMessagesByChannel(ch.id)))
+      ).flat();
+      const payload: CommunityExport = communityExportSchema.parse({
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        community,
+        channels,
+        roles,
+        memberCount: members.length,
+        messages: allMessages,
+        inviteCount: invites.length,
+      });
+      const filename = `cove-export-${community.id}-${new Date().toISOString().slice(0, 10)}.json`;
+      return reply
+        .code(200)
+        .header('content-type', 'application/json')
+        .header('content-disposition', `attachment; filename="${filename}"`)
+        .send(JSON.stringify(payload));
+    },
+  );
 
   // Operator backup/restore
   app.post('/v1/operator/backup', async (request, reply) => {

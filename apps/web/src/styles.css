@@ -861,6 +861,58 @@ button {
   font-size: 10px;
   text-transform: none;
 }
+
+.audit-log-panel .audit-empty {
+  margin: 8px 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.audit-events {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0;
+  padding: 0;
+  list-style: none;
+}
+
+.audit-event {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  padding: 9px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--surface-raised);
+}
+
+.audit-event > span {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.audit-action {
+  color: var(--text-primary);
+  font-size: 11px;
+  text-transform: capitalize;
+}
+
+.audit-event small,
+.audit-time {
+  overflow: hidden;
+  color: var(--text-faint);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.audit-time {
+  align-self: start;
+}
 .person-row {
   width: 100%;
   display: grid;

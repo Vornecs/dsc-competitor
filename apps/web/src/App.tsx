@@ -10,6 +10,7 @@ import {
   voiceParticipantJoinedSchema,
   voiceParticipantLeftSchema,
   voiceSessionSchema,
+  type AuditEvent,
   type BootstrapState,
   type AttentionItem,
   type Channel,
@@ -22,6 +23,8 @@ import { Avatar, IconButton, StatusPill } from '@cove/ui';
 import {
   Bell,
   ChevronDown,
+  ClipboardList,
+  Download,
   Hash,
   Headphones,
   Inbox,
@@ -123,6 +126,87 @@ export function reconcileVoiceLeave(
   });
 }
 
+export function reconcileAuditLog(current: AuditEvent[], incoming: AuditEvent[]): AuditEvent[] {
+  const merged = [...current];
+  const seen = new Set(current.map((event) => event.id));
+  for (const event of incoming) {
+    if (seen.has(event.id)) continue;
+    seen.add(event.id);
+    merged.push(event);
+  }
+  return merged;
+}
+
+function AuditLogPanel({
+  events,
+  loading,
+  error,
+  hasMore,
+  onLoadMore,
+  onExport,
+  communityId,
+}: {
+  events: AuditEvent[];
+  loading: boolean;
+  error: string | null;
+  hasMore: boolean;
+  onLoadMore: () => void;
+  onExport: () => void;
+  communityId: string;
+}) {
+  return (
+    <section className="audit-log-panel" aria-label="Audit log">
+      <header>
+        <span>Audit log</span>
+        <button
+          type="button"
+          title="Export community data"
+          aria-label="Export community data"
+          onClick={onExport}
+          data-community-id={communityId}
+        >
+          <Download size={15} />
+        </button>
+      </header>
+      {error ? (
+        <p className="audit-empty" role="status">
+          {error}
+        </p>
+      ) : loading && events.length === 0 ? (
+        <p className="audit-empty">Loading…</p>
+      ) : events.length === 0 ? (
+        <p className="audit-empty">No audit events yet.</p>
+      ) : (
+        <ol className="audit-events" aria-label="Audit events">
+          {events.map((event) => (
+            <li key={event.id} className="audit-event">
+              <span>
+                <strong className="audit-action">{event.action.replaceAll('.', ' ')}</strong>
+                <small>
+                  {event.targetType} · {event.targetId}
+                </small>
+              </span>
+              <time className="audit-time" dateTime={event.createdAt}>
+                {new Intl.DateTimeFormat(undefined, {
+                  month: 'short',
+                  day: 'numeric',
+                  hour: '2-digit',
+                  minute: '2-digit',
+                }).format(new Date(event.createdAt))}
+              </time>
+            </li>
+          ))}
+        </ol>
+      )}
+      {hasMore && (
+        <button type="button" onClick={onLoadMore} disabled={loading}>
+          Load more
+        </button>
+      )}
+    </section>
+  );
+}
+
 function PrivacyNotice({ channel }: { channel: Channel }) {
   const managed = channel.privacy.mode === 'managed';
   return (
@@ -163,6 +247,11 @@ export function App() {
   const [communityStats, setCommunityStats] = useState<CommunityStats | null>(null);
   const [activeVoiceChannelId, setActiveVoiceChannelId] = useState<string | null>(null);
   const [voiceSession, setVoiceSession] = useState<VoiceSession | null>(null);
+  const [auditLog, setAuditLog] = useState<AuditEvent[]>([]);
+  const [auditLogOpen, setAuditLogOpen] = useState(false);
+  const [auditLogNextCursor, setAuditLogNextCursor] = useState<string | null>(null);
+  const [auditLogLoading, setAuditLogLoading] = useState(false);
+  const [auditLogError, setAuditLogError] = useState<string | null>(null);
   const sessionToken: string | null = null;
   const endRef = useRef<HTMLDivElement>(null);
 
@@ -399,6 +488,65 @@ export function App() {
     }
   }
 
+  async function fetchAuditLog(cursor?: string) {
+    if (import.meta.env.MODE === 'test') return;
+    setAuditLogLoading(true);
+    setAuditLogError(null);
+    try {
+      const params = cursor ? `?cursor=${encodeURIComponent(cursor)}` : '';
+      const headers: Record<string, string> = {};
+      if (sessionToken) headers['authorization'] = `Bearer ${sessionToken}`;
+      const res = await fetch(
+        `${API_BASE}/v1/communities/${activeCommunity.id}/audit-events${params}`,
+        { headers },
+      );
+      if (!res.ok) {
+        setAuditLogError(
+          res.status === 403
+            ? 'You do not have permission to view this log.'
+            : 'Audit log unavailable.',
+        );
+        return;
+      }
+      const body = (await res.json()) as { items: AuditEvent[]; nextCursor: string | null };
+      setAuditLog((current) => reconcileAuditLog(current, body.items));
+      setAuditLogNextCursor(body.nextCursor);
+    } catch {
+      setAuditLogError('Audit log unavailable.');
+    } finally {
+      setAuditLogLoading(false);
+    }
+  }
+
+  function toggleAuditLog() {
+    const next = !auditLogOpen;
+    setAuditLogOpen(next);
+    if (next && auditLog.length === 0) {
+      void fetchAuditLog();
+    }
+  }
+
+  function exportCommunityData() {
+    if (import.meta.env.MODE === 'test') return;
+    const headers: Record<string, string> = {};
+    if (sessionToken) headers['authorization'] = `Bearer ${sessionToken}`;
+    fetch(`${API_BASE}/v1/communities/${activeCommunity.id}/export`, { headers })
+      .then((res) => {
+        if (!res.ok) return;
+        return res.blob();
+      })
+      .then((blob) => {
+        if (!blob) return;
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `cove-export-${activeCommunity.id}-${new Date().toISOString().slice(0, 10)}.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+      })
+      .catch(() => {});
+  }
+
   return (
     <main className={`app-shell ${contextOpen ? '' : 'app-shell--context-closed'}`}>
       <nav className="space-rail" aria-label="Spaces">
@@ -438,6 +586,12 @@ export function App() {
                 : `${activeCommunity.memberCount} members`}
             </span>
           </div>
+          <IconButton
+            label={auditLogOpen ? 'Close audit log' : 'Open audit log'}
+            onClick={toggleAuditLog}
+          >
+            <ClipboardList size={16} />
+          </IconButton>
           <ChevronDown size={17} />
         </header>
 
@@ -723,58 +877,78 @@ export function App() {
 
       {contextOpen && (
         <aside className="context-panel">
-          <section>
-            <header>
-              <span>In voice now</span>
-              <small>{activePeople.length}</small>
-            </header>
-            {activePeople.map((person) => (
-              <button className="person-row" type="button" key={person.id}>
-                <Avatar initials={person.initials} status={person.status} />
-                <span>
-                  <strong>{person.displayName}</strong>
-                  <small>Ready Room</small>
-                </span>
-                <Volume2 size={15} />
-              </button>
-            ))}
-          </section>
-          <section className="attention-preview">
-            <header>
-              <span>Attention</span>
-              <button type="button">View all</button>
-            </header>
-            {bootstrap.attention.map((item) => (
-              <button className={item.unread ? 'is-unread' : ''} type="button" key={item.id}>
-                <span className="attention-icon">
-                  {item.kind === 'mention' ? <Bell size={16} /> : <MessageSquareText size={16} />}
-                </span>
-                <span>
-                  <strong>{item.title}</strong>
-                  <small>{item.detail}</small>
-                </span>
-              </button>
-            ))}
-          </section>
-          <section className="space-health">
-            <header>
-              <span>Space health</span>
-            </header>
-            <div>
-              <ShieldCheck size={18} />
-              <span>
-                <strong>Calm</strong>
-                <small>No unresolved reports</small>
-              </span>
-            </div>
-            <div>
-              <LockKeyhole size={18} />
-              <span>
-                <strong>Clear privacy</strong>
-                <small>2 managed · 3 sealed rooms</small>
-              </span>
-            </div>
-          </section>
+          {auditLogOpen ? (
+            <AuditLogPanel
+              events={auditLog}
+              loading={auditLogLoading}
+              error={auditLogError}
+              hasMore={auditLogNextCursor !== null}
+              onLoadMore={() => {
+                if (auditLogNextCursor) void fetchAuditLog(auditLogNextCursor);
+              }}
+              onExport={exportCommunityData}
+              communityId={activeCommunity.id}
+            />
+          ) : (
+            <>
+              <section>
+                <header>
+                  <span>In voice now</span>
+                  <small>{activePeople.length}</small>
+                </header>
+                {activePeople.map((person) => (
+                  <button className="person-row" type="button" key={person.id}>
+                    <Avatar initials={person.initials} status={person.status} />
+                    <span>
+                      <strong>{person.displayName}</strong>
+                      <small>Ready Room</small>
+                    </span>
+                    <Volume2 size={15} />
+                  </button>
+                ))}
+              </section>
+              <section className="attention-preview">
+                <header>
+                  <span>Attention</span>
+                  <button type="button">View all</button>
+                </header>
+                {bootstrap.attention.map((item) => (
+                  <button className={item.unread ? 'is-unread' : ''} type="button" key={item.id}>
+                    <span className="attention-icon">
+                      {item.kind === 'mention' ? (
+                        <Bell size={16} />
+                      ) : (
+                        <MessageSquareText size={16} />
+                      )}
+                    </span>
+                    <span>
+                      <strong>{item.title}</strong>
+                      <small>{item.detail}</small>
+                    </span>
+                  </button>
+                ))}
+              </section>
+              <section className="space-health">
+                <header>
+                  <span>Space health</span>
+                </header>
+                <div>
+                  <ShieldCheck size={18} />
+                  <span>
+                    <strong>Calm</strong>
+                    <small>No unresolved reports</small>
+                  </span>
+                </div>
+                <div>
+                  <LockKeyhole size={18} />
+                  <span>
+                    <strong>Clear privacy</strong>
+                    <small>2 managed · 3 sealed rooms</small>
+                  </span>
+                </div>
+              </section>
+            </>
+          )}
         </aside>
       )}
     </main>
