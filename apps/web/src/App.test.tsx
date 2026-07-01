@@ -1,5 +1,4 @@
 import { render, screen } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import { demoBootstrap } from '@cove/contracts';
 import {
@@ -17,29 +16,11 @@ import {
 } from './App';
 
 describe('application shell', () => {
-  it('renders the four-region community experience', () => {
+  it('renders the landing page when not authenticated', () => {
     render(<App />);
-    expect(screen.getByRole('navigation', { name: 'Spaces' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'campfire' })).toBeInTheDocument();
-    expect(screen.getByLabelText('Channel privacy')).toHaveTextContent('Managed conversation');
-    expect(screen.getByRole('button', { name: 'Close context panel' })).toBeInTheDocument();
-  });
-
-  it('switches channels and explains sealed-mode limits', async () => {
-    const user = userEvent.setup();
-    render(<App />);
-    await user.click(screen.getByRole('button', { name: /backstage/i }));
-    expect(screen.getByLabelText('Channel privacy')).toHaveTextContent('Sealed conversation');
-    expect(screen.getByText(/reviewed MLS adapter/i)).toBeInTheDocument();
-  });
-
-  it('exposes density and theme controls with accessible names', async () => {
-    const user = userEvent.setup();
-    render(<App />);
-    await user.selectOptions(screen.getByLabelText('Density'), 'compact');
-    await user.selectOptions(screen.getByLabelText('Theme'), 'contrast');
-    expect(document.documentElement.dataset.density).toBe('compact');
-    expect(document.documentElement.dataset.theme).toBe('contrast');
+    expect(screen.getByRole('heading', { level: 1, name: 'Cove' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Sign In' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Get Early Access →' })).toBeInTheDocument();
   });
 
   it('reconciles an optimistic send without duplicating a gateway event', () => {
@@ -86,20 +67,6 @@ describe('application shell', () => {
 
     expect(reconcileAttentionItem([existing], reply)).toEqual([reply, existing]);
     expect(reconcileAttentionItem([reply, existing], reply)).toEqual([reply, existing]);
-  });
-
-  it('renders the audit log toggle button in the community nav', () => {
-    render(<App />);
-    expect(screen.getByRole('button', { name: 'Open audit log' })).toBeInTheDocument();
-  });
-
-  it('shows the audit log panel when toggled open', async () => {
-    const user = userEvent.setup();
-    render(<App />);
-    await user.click(screen.getByRole('button', { name: 'Open audit log' }));
-    expect(screen.getByRole('region', { name: 'Audit log' })).toBeInTheDocument();
-    expect(screen.getByText('No audit events yet.')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Close audit log' })).toBeInTheDocument();
   });
 
   it('merges audit event pages without duplicating entries', () => {
@@ -149,23 +116,6 @@ describe('application shell', () => {
     // Other channels are unaffected
     const textChannel = demoBootstrap.channels.find((c) => c.kind === 'text')!;
     expect(afterLeave.find((c) => c.id === textChannel.id)).toEqual(textChannel);
-  });
-
-  it('renders the stage channel focus view with hold-to-speak control', async () => {
-    const user = userEvent.setup();
-    render(<App />);
-    await user.click(screen.getByRole('button', { name: /Main Stage/i }));
-    // Both intro (h1) and focus (h2) show channel name; at least one heading must be present
-    expect(screen.getAllByRole('heading', { name: /Main Stage/i }).length).toBeGreaterThanOrEqual(
-      1,
-    );
-    expect(screen.getByText(/PRESS & HOLD TO SPEAK|Join Stage/i)).toBeInTheDocument();
-  });
-
-  it('renders subchannels nested under their parent stage channel in the nav', () => {
-    render(<App />);
-    expect(screen.getByRole('button', { name: /Squad Alpha/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Squad Bravo/i })).toBeInTheDocument();
   });
 
   it('updates participant role when reconcileParticipantRole is called', () => {

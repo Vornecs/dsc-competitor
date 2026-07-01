@@ -355,6 +355,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
   const screenShareSessions = new Map<string, { participantId: string; trackId: string }[]>();
   const serverEmojiByCommunity = new Map<string, ServerEmoji[]>();
   const serverEmojiStorageKeys = new Map<string, { storageKey: string; mimeType: string }>();
+  const mutedChannelIdsByAccount = new Map<string, Set<string>>();
 
   // Seed demo messages into repository
   for (const msg of structuredClone(demoBootstrap.messages)) {
@@ -628,6 +629,38 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
     version: '0.0.0',
     time: new Date().toISOString(),
   }));
+
+  app.post<{ Body: { channelId?: unknown } }>(
+    '/v1/accounts/me/muted-channels',
+    async (request, reply) => {
+      const ok = await requireAuth(request, reply);
+      if (!ok) return;
+      if (typeof request.body?.channelId !== 'string' || request.body.channelId.length === 0) {
+        return problem(
+          reply,
+          400,
+          'Invalid channel ID',
+          'channelId must be a non-empty string.',
+          request.url,
+        );
+      }
+
+      const { account } = (request as any).user as { account: Account };
+      const channelIds = mutedChannelIdsByAccount.get(account.id) ?? new Set<string>();
+      channelIds.add(request.body.channelId);
+      mutedChannelIdsByAccount.set(account.id, channelIds);
+      return reply.code(200).send({ channelIds: Array.from(channelIds) });
+    },
+  );
+
+  app.get('/v1/accounts/me/muted-channels', async (request, reply) => {
+    const ok = await requireAuth(request, reply);
+    if (!ok) return;
+    const { account } = (request as any).user as { account: Account };
+    return reply
+      .code(200)
+      .send({ channelIds: Array.from(mutedChannelIdsByAccount.get(account.id) ?? []) });
+  });
 
   app.get('/v1/bootstrap', async (request, reply) => {
     const authHeader = request.headers['authorization'];
@@ -1033,57 +1066,66 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
     },
   );
 
-  app.get<{ Params: { channelId: string } }>(
-    '/v1/channels/:channelId/messages',
-    async (request, reply) => {
-      const demoChannel = demoBootstrap.channels.find(
-        (candidate) => candidate.id === request.params.channelId,
+  app.get<{
+    Params: { channelId: string };
+    Querystring: { before?: string; limit?: string };
+  }>('/v1/channels/:channelId/messages', async (request, reply) => {
+    const demoChannel = demoBootstrap.channels.find(
+      (candidate) => candidate.id === request.params.channelId,
+    );
+    const dynamicChannel = await findDynamicChannel(request.params.channelId);
+    const channel = demoChannel ?? dynamicChannel;
+    if (!channel || channel.kind !== 'text') {
+      return problem(
+        reply,
+        404,
+        'Channel not found',
+        'The requested text channel does not exist.',
+        request.url,
       );
-      const dynamicChannel = await findDynamicChannel(request.params.channelId);
-      const channel = demoChannel ?? dynamicChannel;
-      if (!channel || channel.kind !== 'text') {
-        return problem(
-          reply,
-          404,
-          'Channel not found',
-          'The requested text channel does not exist.',
-          request.url,
-        );
-      }
+    }
 
-      let viewerAccountId: string | undefined;
-      if (dynamicChannel) {
-        const ok = await requireAuth(request, reply);
-        if (!ok) return;
-        const { account: authenticatedAccount } = (request as any).user;
-        viewerAccountId = authenticatedAccount.id;
-        const membership = await requireMembership(
-          reply,
-          dynamicChannel.communityId,
-          authenticatedAccount.id,
-          request.url,
-        );
-        if (!membership) return;
-        const permission = await requirePermission(
-          reply,
-          dynamicChannel.communityId,
-          membership,
-          authenticatedAccount.id,
-          'message.read',
-          request.url,
-        );
-        if (!permission) return;
-      }
+    let viewerAccountId: string | undefined;
+    if (dynamicChannel) {
+      const ok = await requireAuth(request, reply);
+      if (!ok) return;
+      const { account: authenticatedAccount } = (request as any).user;
+      viewerAccountId = authenticatedAccount.id;
+      const membership = await requireMembership(
+        reply,
+        dynamicChannel.communityId,
+        authenticatedAccount.id,
+        request.url,
+      );
+      if (!membership) return;
+      const permission = await requirePermission(
+        reply,
+        dynamicChannel.communityId,
+        membership,
+        authenticatedAccount.id,
+        'message.read',
+        request.url,
+      );
+      if (!permission) return;
+    }
 
-      const messages = await repo.getMessagesByChannel(channel.id);
-      return reply.code(200).send({
-        items: await Promise.all(
-          messages.map((message) => materializeMessage(message, viewerAccountId)),
-        ),
-        nextCursor: null,
-      });
-    },
-  );
+    const requestedLimit = Number(request.query.limit ?? '50');
+    const limit =
+      Number.isInteger(requestedLimit) && requestedLimit > 0 ? Math.min(requestedLimit, 200) : 50;
+    const messages = (await repo.getMessagesByChannel(channel.id)).sort((a, b) => {
+      const createdAtOrder = b.createdAt.localeCompare(a.createdAt);
+      return createdAtOrder !== 0 ? createdAtOrder : b.id.localeCompare(a.id);
+    });
+    const cursorIndex = request.query.before
+      ? messages.findIndex((message) => message.id === request.query.before)
+      : -1;
+    const pageStart = cursorIndex >= 0 ? cursorIndex + 1 : 0;
+    const page = messages.slice(pageStart, pageStart + limit);
+    return reply.code(200).send({
+      items: await Promise.all(page.map((message) => materializeMessage(message, viewerAccountId))),
+      nextCursor: page.length === limit ? page[page.length - 1]!.id : null,
+    });
+  });
 
   app.post<{ Params: { channelId: string } }>(
     '/v1/channels/:channelId/messages',
@@ -2008,8 +2050,31 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
     await repo.addRole(everyoneRole);
     hub.grantCommunityAccess(account.id, communityId);
 
+    // Every new community needs at least one channel so it's immediately usable.
+    const generalChannel: Channel = {
+      id: `channel-${crypto.randomUUID()}`,
+      communityId,
+      name: 'general',
+      kind: 'text',
+      category: 'Text Channels',
+      topic: '',
+      privacy: {
+        mode: 'managed',
+        searchableByServer: true,
+        appsMayReadContent: false,
+        deletedContentRecoveryDays: 7,
+        evidenceRetentionDays: 90,
+      },
+      participants: [],
+    };
+    await repo.addChannel(generalChannel);
+    await recordAudit(communityId, account.id, 'channel.created', 'channel', generalChannel.id, {
+      name: generalChannel.name,
+      kind: generalChannel.kind,
+    });
+
     app.log.info(`[COMMUNITY] Created ${communityId} by ${account.id}`);
-    return reply.code(201).send(community);
+    return reply.code(201).send({ ...community, channels: [generalChannel] });
   });
 
   app.get('/v1/communities', async (request, reply) => {
@@ -3589,7 +3654,8 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
       usedBy: account.id,
       uses: invite.uses,
     });
-    return reply.code(204).send();
+    const channels = await repo.getChannelsByCommunity(community.id);
+    return reply.code(200).send({ community, channels });
   });
 
   // Permission simulator

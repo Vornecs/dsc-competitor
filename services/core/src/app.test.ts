@@ -85,6 +85,141 @@ describe('core HTTP API', () => {
     expect(replayed.statusCode).toBe(200);
     expect(messageSchema.parse(created.json()).id).toBe(messageSchema.parse(replayed.json()).id);
   });
+
+  it('paginates channel messages newest-first from a message cursor', async () => {
+    const repo = createMemoryRepository();
+    const messages = Array.from({ length: 5 }, (_, index) =>
+      messageSchema.parse({
+        id: `page-message-${index}`,
+        channelId: 'channel-campfire',
+        author: {
+          id: 'account-demo',
+          displayName: 'Demo',
+          initials: 'DE',
+          status: 'online',
+        },
+        availability: 'plaintext',
+        content: `Message ${index}`,
+        createdAt: new Date(Date.UTC(2099, 0, 1, 0, 0, index)).toISOString(),
+        editedAt: null,
+        reactions: [],
+        attachments: [],
+      }),
+    );
+    await Promise.all(messages.map((message) => repo.addMessage(message)));
+    const app = await buildApp({ repo });
+    apps.push(app);
+
+    const firstPage = await app.inject({
+      method: 'GET',
+      url: '/v1/channels/channel-campfire/messages?limit=2',
+    });
+    expect(firstPage.statusCode).toBe(200);
+    expect(firstPage.json().items.map((message: { id: string }) => message.id)).toEqual([
+      'page-message-4',
+      'page-message-3',
+    ]);
+    expect(firstPage.json().nextCursor).toBe('page-message-3');
+
+    const secondPage = await app.inject({
+      method: 'GET',
+      url: '/v1/channels/channel-campfire/messages?limit=2&before=page-message-3',
+    });
+    expect(secondPage.statusCode).toBe(200);
+    expect(secondPage.json().items.map((message: { id: string }) => message.id)).toEqual([
+      'page-message-2',
+      'page-message-1',
+    ]);
+    expect(secondPage.json().nextCursor).toBe('page-message-1');
+  });
+
+  it('clamps the channel message page limit at 200', async () => {
+    const repo = createMemoryRepository();
+    await Promise.all(
+      Array.from({ length: 201 }, (_, index) =>
+        repo.addMessage(
+          messageSchema.parse({
+            id: `limit-message-${index.toString().padStart(3, '0')}`,
+            channelId: 'channel-campfire',
+            author: {
+              id: 'account-demo',
+              displayName: 'Demo',
+              initials: 'DE',
+              status: 'online',
+            },
+            availability: 'plaintext',
+            content: `Message ${index}`,
+            createdAt: new Date(Date.UTC(2099, 0, 1, 0, 0, index)).toISOString(),
+            editedAt: null,
+            reactions: [],
+            attachments: [],
+          }),
+        ),
+      ),
+    );
+    const app = await buildApp({ repo });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/v1/channels/channel-campfire/messages?limit=999',
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().items).toHaveLength(200);
+    expect(response.json().nextCursor).toBe('limit-message-001');
+  });
+
+  it('persists muted channels for the authenticated account', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const email = `mute-${crypto.randomUUID()}@test.cove.chat`;
+    const challenge = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/email/send-code',
+      payload: { email },
+    });
+    const verified = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/email/verify',
+      payload: { email, code: '123456', challengeId: challenge.json().challengeId },
+    });
+    const headers = { authorization: `Bearer ${verified.json().sessionToken as string}` };
+
+    const muted = await app.inject({
+      method: 'POST',
+      url: '/v1/accounts/me/muted-channels',
+      headers,
+      payload: { channelId: 'channel-campfire' },
+    });
+    expect(muted.statusCode).toBe(200);
+    expect(muted.json()).toEqual({ channelIds: ['channel-campfire'] });
+
+    const fetched = await app.inject({
+      method: 'GET',
+      url: '/v1/accounts/me/muted-channels',
+      headers,
+    });
+    expect(fetched.statusCode).toBe(200);
+    expect(fetched.json()).toEqual({ channelIds: ['channel-campfire'] });
+  });
+
+  it('requires authentication for muted-channel persistence', async () => {
+    const app = await buildApp();
+    apps.push(app);
+
+    const post = await app.inject({
+      method: 'POST',
+      url: '/v1/accounts/me/muted-channels',
+      payload: { channelId: 'channel-campfire' },
+    });
+    expect(post.statusCode).toBe(401);
+
+    const get = await app.inject({
+      method: 'GET',
+      url: '/v1/accounts/me/muted-channels',
+    });
+    expect(get.statusCode).toBe(401);
+  });
 });
 
 describe('realtime gateway', () => {
@@ -503,8 +638,8 @@ describe('channel API', () => {
     });
     expect(listRes.statusCode).toBe(200);
     const { channels } = listRes.json();
-    expect(channels.length).toBe(1);
-    expect(channels[0].id).toBe(channel.id);
+    expect(channels.length).toBe(2);
+    expect(channels.some((c: { id: string }) => c.id === channel.id)).toBe(true);
   });
 
   it('rejects channel creation by non-admin members', async () => {
@@ -1057,7 +1192,9 @@ describe('invite API', () => {
       url: `/v1/invites/${invite.code}`,
       headers: { authorization: `Bearer ${memberToken}` },
     });
-    expect(joinRes.statusCode).toBe(204);
+    expect(joinRes.statusCode).toBe(200);
+    expect(joinRes.json().community.id).toBe(communityId);
+    expect(Array.isArray(joinRes.json().channels)).toBe(true);
 
     const listRes = await app.inject({
       method: 'GET',
@@ -2113,7 +2250,7 @@ describe('community stats API', () => {
     expect(statsRes.statusCode).toBe(200);
     const stats = statsRes.json();
     expect(stats.memberCount).toBe(2);
-    expect(stats.channelCount).toBe(1);
+    expect(stats.channelCount).toBe(2);
     expect(stats.messageCount).toBe(0);
     expect(typeof stats.onlineCount).toBe('number');
   });
@@ -2242,7 +2379,7 @@ describe('operator audit log', () => {
     });
     expect(page2Res.statusCode).toBe(200);
     const page2 = page2Res.json() as { items: unknown[]; nextCursor: string | null };
-    expect(page2.items.length).toBe(1);
+    expect(page2.items.length).toBe(2);
     expect(page2.nextCursor).toBeNull();
   });
 

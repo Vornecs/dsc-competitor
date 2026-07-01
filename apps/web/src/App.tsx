@@ -2,7 +2,6 @@ import {
   bootstrapStateSchema,
   attentionItemSchema,
   communityStatsSchema,
-  demoBootstrap,
   gatewayServerFrameSchema,
   messageReactionUpdateSchema,
   messageSchema,
@@ -57,6 +56,7 @@ import { Room, RoomEvent, Track } from 'livekit-client';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { resolveRuntimeConfig } from './runtime-config';
+import { Landing } from './Landing';
 
 type ConnectionState = 'connecting' | 'live' | 'preview';
 type Density = 'compact' | 'comfortable' | 'touch';
@@ -69,6 +69,50 @@ const runtimeConfig = resolveRuntimeConfig(
   window.location.origin,
 );
 const API_BASE = runtimeConfig.apiBase;
+
+const LOADING_BOOTSTRAP: BootstrapState = {
+  account: { id: '__loading__', handle: '__', displayName: '', initials: '…', status: 'offline' },
+  communities: [{ id: '__loading__', name: '', mark: '…', accent: '#888888', memberCount: 0 }],
+  activeCommunityId: '__loading__',
+  activeChannelId: '__loading__',
+  channels: [
+    {
+      id: '__loading__',
+      communityId: '__loading__',
+      name: '',
+      kind: 'text',
+      category: '',
+      topic: '',
+      privacy: {
+        mode: 'managed',
+        searchableByServer: false,
+        appsMayReadContent: false,
+        deletedContentRecoveryDays: 0,
+        evidenceRetentionDays: 0,
+      },
+      participants: [],
+    },
+  ],
+  messages: [],
+  attention: [],
+};
+
+const EMPTY_CHANNEL_PLACEHOLDER: Channel = {
+  id: '__no-channels__',
+  communityId: '__no-channels__',
+  name: 'No channels yet',
+  kind: 'text',
+  category: 'Text Channels',
+  topic: 'This space has no channels. Create one to start talking.',
+  privacy: {
+    mode: 'managed',
+    searchableByServer: false,
+    appsMayReadContent: false,
+    deletedContentRecoveryDays: 0,
+    evidenceRetentionDays: 0,
+  },
+  participants: [],
+};
 
 function timeLabel(value: string) {
   return new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(
@@ -272,9 +316,9 @@ function ChannelIcon({ channel }: { channel: Channel }) {
 }
 
 export function App() {
-  const [bootstrap, setBootstrap] = useState<BootstrapState>(demoBootstrap);
-  const [activeChannelId, setActiveChannelId] = useState<string | null>(demoBootstrap.activeChannelId);
-  const [messages, setMessages] = useState<Message[]>(demoBootstrap.messages);
+  const [bootstrap, setBootstrap] = useState<BootstrapState>(LOADING_BOOTSTRAP);
+  const [activeChannelId, setActiveChannelId] = useState<string | null>(null);
+  const [messages, setMessages] = useState<Message[]>([]);
   const [draft, setDraft] = useState('');
   const [connection, setConnection] = useState<ConnectionState>('connecting');
   const [contextOpen, setContextOpen] = useState(true);
@@ -348,9 +392,9 @@ export function App() {
   function handleSignOut() {
     localStorage.removeItem('cove_session_token');
     setSessionToken(null);
-    setBootstrap(demoBootstrap);
-    setMessages(demoBootstrap.messages);
-    setConnection('preview');
+    setBootstrap(LOADING_BOOTSTRAP);
+    setMessages([]);
+    setConnection('connecting');
   }
 
   async function fetchChannelMessages(channelId: string) {
@@ -415,8 +459,12 @@ export function App() {
         body: JSON.stringify({ name: newCommunityName.trim() }),
       });
       if (!res.ok) throw new Error(`${res.status}`);
-      const community = await res.json();
-      setBootstrap((prev) => ({ ...prev, communities: [...prev.communities, community] }));
+      const { channels: newChannels, ...community } = await res.json();
+      setBootstrap((prev) => ({
+        ...prev,
+        communities: [...prev.communities, community],
+        channels: [...prev.channels, ...(Array.isArray(newChannels) ? newChannels : [])],
+      }));
       setShowSpaceModal(false);
       setNewCommunityName('');
       void switchCommunity(community.id);
@@ -434,7 +482,7 @@ export function App() {
     setSpaceModalLoading(true);
     try {
       const res = await fetch(
-        `${API_BASE}/v1/invites/${encodeURIComponent(joinInviteCode.trim())}/join`,
+        `${API_BASE}/v1/invites/${encodeURIComponent(joinInviteCode.trim())}`,
         {
           method: 'POST',
           headers: { authorization: `Bearer ${sessionToken}` },
@@ -442,12 +490,16 @@ export function App() {
       );
       if (res.status === 404) throw new Error('Invite not found or expired.');
       if (!res.ok) throw new Error(`${res.status}`);
-      const { community } = await res.json();
+      const { community, channels: joinedChannels } = await res.json();
       setBootstrap((prev) => ({
         ...prev,
         communities: prev.communities.some((c) => c.id === community.id)
           ? prev.communities
           : [...prev.communities, community],
+        channels: [
+          ...prev.channels.filter((ch) => ch.communityId !== community.id),
+          ...(Array.isArray(joinedChannels) ? joinedChannels : []),
+        ],
       }));
       setShowSpaceModal(false);
       setJoinInviteCode('');
@@ -615,14 +667,17 @@ export function App() {
 
   const endRef = useRef<HTMLDivElement>(null);
 
-  const activeCommunity = bootstrap.communities.find(
-    (community) => community.id === bootstrap.activeCommunityId,
-  )!;
+  const activeCommunity =
+    bootstrap.communities.find((community) => community.id === bootstrap.activeCommunityId) ??
+    bootstrap.communities[0] ??
+    LOADING_BOOTSTRAP.communities[0]!;
   const communityChannels = bootstrap.channels.filter(
     (channel) => channel.communityId === activeCommunity.id,
   );
   const activeChannel =
-    communityChannels.find((channel) => channel.id === activeChannelId) ?? communityChannels[0]!;
+    communityChannels.find((channel) => channel.id === activeChannelId) ??
+    communityChannels[0] ??
+    EMPTY_CHANNEL_PLACEHOLDER;
   const channelMessages = messages.filter((message) => message.channelId === activeChannel.id);
   const categories = useMemo(
     () => [...new Set(communityChannels.map((channel) => channel.category))],
@@ -644,12 +699,9 @@ export function App() {
   }, [density, theme]);
 
   useEffect(() => {
-    if (import.meta.env.MODE === 'test') return;
+    if (import.meta.env.MODE === 'test' || !sessionToken) return;
     const controller = new AbortController();
-    const headers: Record<string, string> = {};
-    if (sessionToken) {
-      headers['authorization'] = `Bearer ${sessionToken}`;
-    }
+    const headers: Record<string, string> = { authorization: `Bearer ${sessionToken}` };
     void fetch(`${API_BASE}/v1/bootstrap`, { headers, signal: controller.signal })
       .then((response) => {
         if (!response.ok) throw new Error('Core service unavailable');
@@ -666,10 +718,8 @@ export function App() {
   }, [sessionToken]);
 
   useEffect(() => {
-    if (import.meta.env.MODE === 'test' || typeof WebSocket === 'undefined') return;
-    const url = sessionToken
-      ? `${runtimeConfig.gatewayUrl}?token=${encodeURIComponent(sessionToken)}`
-      : runtimeConfig.gatewayUrl;
+    if (import.meta.env.MODE === 'test' || typeof WebSocket === 'undefined' || !sessionToken) return;
+    const url = `${runtimeConfig.gatewayUrl}?token=${encodeURIComponent(sessionToken)}`;
     const socket = new WebSocket(url);
     let heartbeat: number | undefined;
     socket.addEventListener('open', () => setConnection('connecting'));
@@ -1244,6 +1294,157 @@ export function App() {
       .catch(() => {});
   }
 
+  const loginModal = showLoginModal && (
+    <div
+      className="login-modal-overlay"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="login-title"
+    >
+      <div className="login-modal">
+        <h2 id="login-title">Sign in to Cove</h2>
+        <p>Enter your email address to receive a secure 6-digit login code.</p>
+
+        {loginError && (
+          <p className="login-error" role="alert">
+            {loginError}
+          </p>
+        )}
+        {loginSuccessMessage && (
+          <p className="login-success" role="status">
+            {loginSuccessMessage}
+          </p>
+        )}
+
+        {!loginChallengeId ? (
+          <form onSubmit={handleSendCode}>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              Email Address
+              <input
+                type="email"
+                value={loginEmail}
+                onChange={(e) => setLoginEmail(e.target.value)}
+                placeholder="name@example.com"
+                required
+                disabled={loginLoading}
+                style={{
+                  background: 'var(--surface)',
+                  border: '1px solid var(--border)',
+                  borderRadius: '6px',
+                  padding: '10px 12px',
+                  color: 'var(--text)',
+                }}
+              />
+            </label>
+            <div style={{ display: 'flex', gap: '8px', marginTop: '12px' }}>
+              <button
+                type="submit"
+                disabled={loginLoading}
+                style={{
+                  flex: 1,
+                  background: 'var(--accent)',
+                  color: '#fff',
+                  border: 0,
+                  borderRadius: '6px',
+                  padding: '10px',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                }}
+              >
+                {loginLoading ? 'Sending…' : 'Send Code'}
+              </button>
+              <button
+                type="button"
+                className="cancel-btn"
+                onClick={() => setShowLoginModal(false)}
+                disabled={loginLoading}
+                style={{
+                  background: 'transparent',
+                  border: '1px solid var(--border)',
+                  borderRadius: '6px',
+                  padding: '10px',
+                  color: 'var(--text-muted)',
+                  cursor: 'pointer',
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+          </form>
+        ) : (
+          <form onSubmit={handleVerifyCode}>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              Verification Code
+              <input
+                type="text"
+                value={loginCode}
+                onChange={(e) => setLoginCode(e.target.value)}
+                placeholder="123456"
+                maxLength={6}
+                required
+                disabled={loginLoading}
+                style={{
+                  background: 'var(--surface)',
+                  border: '1px solid var(--border)',
+                  borderRadius: '6px',
+                  padding: '10px 12px',
+                  color: 'var(--text)',
+                }}
+              />
+            </label>
+            <div style={{ display: 'flex', gap: '8px', marginTop: '12px' }}>
+              <button
+                type="submit"
+                disabled={loginLoading}
+                style={{
+                  flex: 1,
+                  background: 'var(--accent)',
+                  color: '#fff',
+                  border: 0,
+                  borderRadius: '6px',
+                  padding: '10px',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                }}
+              >
+                {loginLoading ? 'Verifying…' : 'Verify Code'}
+              </button>
+              <button
+                type="button"
+                className="cancel-btn"
+                onClick={() => {
+                  setLoginChallengeId(null);
+                  setLoginCode('');
+                  setLoginSuccessMessage(null);
+                }}
+                disabled={loginLoading}
+                style={{
+                  background: 'transparent',
+                  border: '1px solid var(--border)',
+                  borderRadius: '6px',
+                  padding: '10px',
+                  color: 'var(--text-muted)',
+                  cursor: 'pointer',
+                }}
+              >
+                Back
+              </button>
+            </div>
+          </form>
+        )}
+      </div>
+    </div>
+  );
+
+  if (!sessionToken) {
+    return (
+      <>
+        <Landing onSignIn={() => setShowLoginModal(true)} />
+        {loginModal}
+      </>
+    );
+  }
+
   return (
     <main className={`app-shell ${contextOpen ? '' : 'app-shell--context-closed'}`}>
       <nav className="space-rail" aria-label="Spaces">
@@ -1532,11 +1733,7 @@ export function App() {
           </div>
           <span className="header-spacer" />
           <StatusPill tone={connection === 'live' ? 'good' : 'quiet'}>
-            {connection === 'live'
-              ? 'Live'
-              : connection === 'connecting'
-                ? 'Connecting'
-                : 'Preview data'}
+            {connection === 'live' ? 'Live' : 'Connecting'}
           </StatusPill>
           <label className="select-control">
             <span>Density</span>
@@ -1935,147 +2132,7 @@ export function App() {
         </aside>
       )}
 
-      {showLoginModal && (
-        <div
-          className="login-modal-overlay"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="login-title"
-        >
-          <div className="login-modal">
-            <h2 id="login-title">Sign in to Cove</h2>
-            <p>Enter your email address to receive a secure 6-digit login code.</p>
-
-            {loginError && (
-              <p className="login-error" role="alert">
-                {loginError}
-              </p>
-            )}
-            {loginSuccessMessage && (
-              <p className="login-success" role="status">
-                {loginSuccessMessage}
-              </p>
-            )}
-
-            {!loginChallengeId ? (
-              <form onSubmit={handleSendCode}>
-                <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  Email Address
-                  <input
-                    type="email"
-                    value={loginEmail}
-                    onChange={(e) => setLoginEmail(e.target.value)}
-                    placeholder="name@example.com"
-                    required
-                    disabled={loginLoading}
-                    style={{
-                      background: 'var(--surface)',
-                      border: '1px solid var(--border)',
-                      borderRadius: '6px',
-                      padding: '10px 12px',
-                      color: 'var(--text)',
-                    }}
-                  />
-                </label>
-                <div style={{ display: 'flex', gap: '8px', marginTop: '12px' }}>
-                  <button
-                    type="submit"
-                    disabled={loginLoading}
-                    style={{
-                      flex: 1,
-                      background: 'var(--accent)',
-                      color: '#fff',
-                      border: 0,
-                      borderRadius: '6px',
-                      padding: '10px',
-                      fontWeight: 600,
-                      cursor: 'pointer',
-                    }}
-                  >
-                    {loginLoading ? 'Sending…' : 'Send Code'}
-                  </button>
-                  <button
-                    type="button"
-                    className="cancel-btn"
-                    onClick={() => setShowLoginModal(false)}
-                    disabled={loginLoading}
-                    style={{
-                      background: 'transparent',
-                      border: '1px solid var(--border)',
-                      borderRadius: '6px',
-                      padding: '10px',
-                      color: 'var(--text-muted)',
-                      cursor: 'pointer',
-                    }}
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </form>
-            ) : (
-              <form onSubmit={handleVerifyCode}>
-                <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  Verification Code
-                  <input
-                    type="text"
-                    value={loginCode}
-                    onChange={(e) => setLoginCode(e.target.value)}
-                    placeholder="123456"
-                    maxLength={6}
-                    required
-                    disabled={loginLoading}
-                    style={{
-                      background: 'var(--surface)',
-                      border: '1px solid var(--border)',
-                      borderRadius: '6px',
-                      padding: '10px 12px',
-                      color: 'var(--text)',
-                    }}
-                  />
-                </label>
-                <div style={{ display: 'flex', gap: '8px', marginTop: '12px' }}>
-                  <button
-                    type="submit"
-                    disabled={loginLoading}
-                    style={{
-                      flex: 1,
-                      background: 'var(--accent)',
-                      color: '#fff',
-                      border: 0,
-                      borderRadius: '6px',
-                      padding: '10px',
-                      fontWeight: 600,
-                      cursor: 'pointer',
-                    }}
-                  >
-                    {loginLoading ? 'Verifying…' : 'Verify Code'}
-                  </button>
-                  <button
-                    type="button"
-                    className="cancel-btn"
-                    onClick={() => {
-                      setLoginChallengeId(null);
-                      setLoginCode('');
-                      setLoginSuccessMessage(null);
-                    }}
-                    disabled={loginLoading}
-                    style={{
-                      background: 'transparent',
-                      border: '1px solid var(--border)',
-                      borderRadius: '6px',
-                      padding: '10px',
-                      color: 'var(--text-muted)',
-                      cursor: 'pointer',
-                    }}
-                  >
-                    Back
-                  </button>
-                </div>
-              </form>
-            )}
-          </div>
-        </div>
-      )}
+      {loginModal}
       {showSpaceModal && (
         <div
           className="login-modal-overlay"
