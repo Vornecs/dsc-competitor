@@ -694,24 +694,19 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
             }
           }
 
-          const bootstrapCommunities =
-            communities.length > 0 ? communities : demoBootstrap.communities;
-          const bootstrapChannels = communities.length > 0 ? channels : demoBootstrap.channels;
-
           if (!activeCommunityId) {
-            activeCommunityId = demoBootstrap.activeCommunityId;
+            activeCommunityId = 'no-community';
           }
           if (!activeChannelId) {
-            activeChannelId = demoBootstrap.activeChannelId;
-            messages = await repo.getMessagesByChannel(activeChannelId);
+            activeChannelId = 'no-channel';
           }
 
           return bootstrapStateSchema.parse({
             account,
-            communities: bootstrapCommunities,
+            communities,
             activeCommunityId,
             activeChannelId,
-            channels: bootstrapChannels,
+            channels,
             messages,
             attention: [],
           });

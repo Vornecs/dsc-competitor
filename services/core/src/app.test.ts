@@ -59,6 +59,9 @@ describe('core HTTP API', () => {
     const authBootstrap = authBootstrapRes.json();
     expect(bootstrapStateSchema.safeParse(authBootstrap).success).toBe(true);
     expect(authBootstrap.account.handle).toBe('customuser');
+    expect(authBootstrap.communities).toEqual([]);
+    expect(authBootstrap.channels).toEqual([]);
+    expect(authBootstrap.messages).toEqual([]);
   });
 
   it('requires idempotency and replays the original message', async () => {
