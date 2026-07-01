@@ -1,6 +1,6 @@
 # Cove Product Plan
 
-> Last updated: 2026-06-30 | Cycle: 32 | Phase: 2b — Polish & Identity | Build health: verified; 152 tests passing (82 core + 32 web + 24 contracts + 14 desktop); strict TypeScript clean
+> Last updated: 2026-07-01 | Cycle: 34 | Phase: 2b — Polish & Identity | Build health: verified; 174 tests passing (86 core + 50 web + 24 contracts + 14 desktop); strict TypeScript clean
 >
 > Current objective: Build an app you and your friends actually want to use. Phase 2b pivots from platform infrastructure to product feel — landing page, UI bug fixes, custom server emoji, user profiles, rich embeds, file upload previews, and appearance customization. Deploying to cove.demonbox360.net on Oracle Cloud via Caddy. Migrating monorepo from npm to pnpm.
 >
