@@ -4,7 +4,7 @@ import {
   gatewayServerFrameSchema,
   messageSchema,
 } from '@cove/contracts';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import WebSocket from 'ws';
 import { buildApp } from './app.js';
 import { createMemoryRepository } from './memory-repository.js';
@@ -13,6 +13,7 @@ const apps: Awaited<ReturnType<typeof buildApp>>[] = [];
 
 afterEach(async () => {
   await Promise.all(apps.splice(0).map((app) => app.close()));
+  vi.unstubAllEnvs();
 });
 
 describe('core HTTP API', () => {
@@ -1717,6 +1718,107 @@ describe('managed message lifecycle', () => {
     memberSocket.close();
   });
 
+  it('supports reactions lifecycle (add emoji, remove emoji, verify reaction count, prevent reacting to deleted message)', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const { owner, member, channelId } = await setup(app);
+
+    const messageRes = await sendMessage(app, channelId, owner.token, 'Test reactions message');
+    expect(messageRes.statusCode).toBe(201);
+    const messageId = messageRes.json().id as string;
+
+    const addReactionRes = await app.inject({
+      method: 'PUT',
+      url: `/v1/channels/${channelId}/messages/${messageId}/reactions`,
+      headers: { authorization: `Bearer ${member.token}` },
+      payload: { emoji: '👍' },
+    });
+    expect(addReactionRes.statusCode).toBe(200);
+    expect(addReactionRes.json().reactions).toEqual([{ emoji: '👍', count: 1, reacted: true }]);
+
+    const removeReactionRes = await app.inject({
+      method: 'DELETE',
+      url: `/v1/channels/${channelId}/messages/${messageId}/reactions`,
+      headers: { authorization: `Bearer ${member.token}` },
+      payload: { emoji: '👍' },
+    });
+    expect(removeReactionRes.statusCode).toBe(200);
+    expect(removeReactionRes.json().reactions).toEqual([]);
+
+    const deleteMessageRes = await app.inject({
+      method: 'DELETE',
+      url: `/v1/channels/${channelId}/messages/${messageId}`,
+      headers: { authorization: `Bearer ${owner.token}` },
+    });
+    expect(deleteMessageRes.statusCode).toBe(200);
+
+    const reactToDeletedRes = await app.inject({
+      method: 'PUT',
+      url: `/v1/channels/${channelId}/messages/${messageId}/reactions`,
+      headers: { authorization: `Bearer ${member.token}` },
+      payload: { emoji: '👍' },
+    });
+    expect(reactToDeletedRes.statusCode).toBe(409);
+  });
+
+  it('supports replies flow (send reply, verify replyPreview, verify invalid replyToId in wrong channel)', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const { owner, communityId, channelId } = await setup(app);
+
+    const parentRes = await sendMessage(app, channelId, owner.token, 'Parent message');
+    expect(parentRes.statusCode).toBe(201);
+    const parentId = parentRes.json().id as string;
+
+    const replyRes = await app.inject({
+      method: 'POST',
+      url: `/v1/channels/${channelId}/messages`,
+      headers: {
+        authorization: `Bearer ${owner.token}`,
+        'idempotency-key': `reply-test-${crypto.randomUUID()}`,
+      },
+      payload: {
+        content: 'This is my reply',
+        clientNonce: `nonce-${crypto.randomUUID()}`,
+        replyToId: parentId,
+      },
+    });
+    expect(replyRes.statusCode).toBe(201);
+    
+    const replyData = replyRes.json();
+    expect(replyData.replyToId).toBe(parentId);
+    expect(replyData.replyPreview).toMatchObject({
+      id: parentId,
+      content: 'Parent message',
+      authorDisplayName: expect.any(String),
+      availability: 'plaintext',
+    });
+
+    const otherChannelRes = await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/channels`,
+      headers: { authorization: `Bearer ${owner.token}` },
+      payload: { name: 'other-channel', kind: 'text', category: 'Chat' },
+    });
+    expect(otherChannelRes.statusCode).toBe(201);
+    const otherChannelId = otherChannelRes.json().id as string;
+
+    const invalidReplyRes = await app.inject({
+      method: 'POST',
+      url: `/v1/channels/${otherChannelId}/messages`,
+      headers: {
+        authorization: `Bearer ${owner.token}`,
+        'idempotency-key': `reply-invalid-${crypto.randomUUID()}`,
+      },
+      payload: {
+        content: 'Invalid reply',
+        clientNonce: `nonce-${crypto.randomUUID()}`,
+        replyToId: parentId,
+      },
+    });
+    expect(invalidReplyRes.statusCode).toBe(400);
+  });
+
   it('updates member presence online/offline with multi-session-safe transitions and gateway fanout', async () => {
     const repo = createMemoryRepository();
     const app = await buildApp({ repo });
@@ -2170,6 +2272,7 @@ describe('operator audit log', () => {
   });
 
   it('supports operator backup and restore drill', async () => {
+    vi.stubEnv('OPERATOR_KEY', 'test-operator-key');
     const app = await buildApp();
     apps.push(app);
 
@@ -2177,7 +2280,7 @@ describe('operator audit log', () => {
     const backupRes1 = await app.inject({
       method: 'POST',
       url: '/v1/operator/backup',
-      headers: { 'x-operator-key': 'dev-operator-key-42' },
+      headers: { 'x-operator-key': 'test-operator-key' },
     });
     expect(backupRes1.statusCode).toBe(200);
     const backupData1 = backupRes1.body;
@@ -2209,7 +2312,7 @@ describe('operator audit log', () => {
     const backupRes2 = await app.inject({
       method: 'POST',
       url: '/v1/operator/backup',
-      headers: { 'x-operator-key': 'dev-operator-key-42' },
+      headers: { 'x-operator-key': 'test-operator-key' },
     });
     expect(backupRes2.statusCode).toBe(200);
     const backupData2 = backupRes2.body;
@@ -2218,7 +2321,7 @@ describe('operator audit log', () => {
     const restoreRes1 = await app.inject({
       method: 'POST',
       url: '/v1/operator/restore',
-      headers: { 'x-operator-key': 'dev-operator-key-42', 'content-type': 'application/json' },
+      headers: { 'x-operator-key': 'test-operator-key', 'content-type': 'application/json' },
       payload: backupData1,
     });
     expect(restoreRes1.statusCode).toBe(204);
@@ -2235,7 +2338,7 @@ describe('operator audit log', () => {
     const restoreRes2 = await app.inject({
       method: 'POST',
       url: '/v1/operator/restore',
-      headers: { 'x-operator-key': 'dev-operator-key-42', 'content-type': 'application/json' },
+      headers: { 'x-operator-key': 'test-operator-key', 'content-type': 'application/json' },
       payload: backupData2,
     });
     expect(restoreRes2.statusCode).toBe(204);
@@ -2247,6 +2350,29 @@ describe('operator audit log', () => {
       headers: { authorization: `Bearer ${tokenTest}` },
     });
     expect(getCommRes2.statusCode).toBe(200);
+  });
+
+  it('rejects operator backup and restore without the configured operator key', async () => {
+    const app = await buildApp();
+    apps.push(app);
+
+    for (const url of ['/v1/operator/backup', '/v1/operator/restore']) {
+      const missingConfiguration = await app.inject({ method: 'POST', url });
+      expect(missingConfiguration.statusCode).toBe(401);
+    }
+
+    vi.stubEnv('OPERATOR_KEY', 'test-operator-key');
+    for (const url of ['/v1/operator/backup', '/v1/operator/restore']) {
+      const missingHeader = await app.inject({ method: 'POST', url });
+      expect(missingHeader.statusCode).toBe(401);
+
+      const invalidHeader = await app.inject({
+        method: 'POST',
+        url,
+        headers: { 'x-operator-key': 'wrong-key' },
+      });
+      expect(invalidHeader.statusCode).toBe(401);
+    }
   });
 });
 
