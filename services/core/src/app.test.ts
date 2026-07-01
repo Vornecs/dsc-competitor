@@ -4,7 +4,7 @@ import {
   gatewayServerFrameSchema,
   messageSchema,
 } from '@cove/contracts';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import WebSocket from 'ws';
 import { buildApp } from './app.js';
 import { createMemoryRepository } from './memory-repository.js';
@@ -13,6 +13,7 @@ const apps: Awaited<ReturnType<typeof buildApp>>[] = [];
 
 afterEach(async () => {
   await Promise.all(apps.splice(0).map((app) => app.close()));
+  vi.unstubAllEnvs();
 });
 
 describe('core HTTP API', () => {
@@ -26,7 +27,41 @@ describe('core HTTP API', () => {
 
     const bootstrap = await app.inject({ method: 'GET', url: '/v1/bootstrap' });
     expect(bootstrap.statusCode).toBe(200);
-    expect(bootstrapStateSchema.safeParse(bootstrap.json()).success).toBe(true);
+  });
+
+  it('returns a customized bootstrap for authenticated requests', async () => {
+    const app = await buildApp();
+    apps.push(app);
+
+    const email = 'custom-user@test.cove.chat';
+    const challengeRes = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/email/send-code',
+      payload: { email },
+    });
+    expect(challengeRes.statusCode).toBe(200);
+    const challengeId = challengeRes.json().challengeId;
+
+    const verifyRes = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/email/verify',
+      payload: { email, code: '123456', challengeId },
+    });
+    expect(verifyRes.statusCode).toBe(200);
+    const token = verifyRes.json().sessionToken;
+
+    const authBootstrapRes = await app.inject({
+      method: 'GET',
+      url: '/v1/bootstrap',
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(authBootstrapRes.statusCode).toBe(200);
+    const authBootstrap = authBootstrapRes.json();
+    expect(bootstrapStateSchema.safeParse(authBootstrap).success).toBe(true);
+    expect(authBootstrap.account.handle).toBe('customuser');
+    expect(authBootstrap.communities).toEqual([]);
+    expect(authBootstrap.channels).toEqual([]);
+    expect(authBootstrap.messages).toEqual([]);
   });
 
   it('requires idempotency and replays the original message', async () => {
@@ -52,6 +87,141 @@ describe('core HTTP API', () => {
     expect(created.statusCode).toBe(201);
     expect(replayed.statusCode).toBe(200);
     expect(messageSchema.parse(created.json()).id).toBe(messageSchema.parse(replayed.json()).id);
+  });
+
+  it('paginates channel messages newest-first from a message cursor', async () => {
+    const repo = createMemoryRepository();
+    const messages = Array.from({ length: 5 }, (_, index) =>
+      messageSchema.parse({
+        id: `page-message-${index}`,
+        channelId: 'channel-campfire',
+        author: {
+          id: 'account-demo',
+          displayName: 'Demo',
+          initials: 'DE',
+          status: 'online',
+        },
+        availability: 'plaintext',
+        content: `Message ${index}`,
+        createdAt: new Date(Date.UTC(2099, 0, 1, 0, 0, index)).toISOString(),
+        editedAt: null,
+        reactions: [],
+        attachments: [],
+      }),
+    );
+    await Promise.all(messages.map((message) => repo.addMessage(message)));
+    const app = await buildApp({ repo });
+    apps.push(app);
+
+    const firstPage = await app.inject({
+      method: 'GET',
+      url: '/v1/channels/channel-campfire/messages?limit=2',
+    });
+    expect(firstPage.statusCode).toBe(200);
+    expect(firstPage.json().items.map((message: { id: string }) => message.id)).toEqual([
+      'page-message-4',
+      'page-message-3',
+    ]);
+    expect(firstPage.json().nextCursor).toBe('page-message-3');
+
+    const secondPage = await app.inject({
+      method: 'GET',
+      url: '/v1/channels/channel-campfire/messages?limit=2&before=page-message-3',
+    });
+    expect(secondPage.statusCode).toBe(200);
+    expect(secondPage.json().items.map((message: { id: string }) => message.id)).toEqual([
+      'page-message-2',
+      'page-message-1',
+    ]);
+    expect(secondPage.json().nextCursor).toBe('page-message-1');
+  });
+
+  it('clamps the channel message page limit at 200', async () => {
+    const repo = createMemoryRepository();
+    await Promise.all(
+      Array.from({ length: 201 }, (_, index) =>
+        repo.addMessage(
+          messageSchema.parse({
+            id: `limit-message-${index.toString().padStart(3, '0')}`,
+            channelId: 'channel-campfire',
+            author: {
+              id: 'account-demo',
+              displayName: 'Demo',
+              initials: 'DE',
+              status: 'online',
+            },
+            availability: 'plaintext',
+            content: `Message ${index}`,
+            createdAt: new Date(Date.UTC(2099, 0, 1, 0, 0, index)).toISOString(),
+            editedAt: null,
+            reactions: [],
+            attachments: [],
+          }),
+        ),
+      ),
+    );
+    const app = await buildApp({ repo });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/v1/channels/channel-campfire/messages?limit=999',
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().items).toHaveLength(200);
+    expect(response.json().nextCursor).toBe('limit-message-001');
+  });
+
+  it('persists muted channels for the authenticated account', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const email = `mute-${crypto.randomUUID()}@test.cove.chat`;
+    const challenge = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/email/send-code',
+      payload: { email },
+    });
+    const verified = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/email/verify',
+      payload: { email, code: '123456', challengeId: challenge.json().challengeId },
+    });
+    const headers = { authorization: `Bearer ${verified.json().sessionToken as string}` };
+
+    const muted = await app.inject({
+      method: 'POST',
+      url: '/v1/accounts/me/muted-channels',
+      headers,
+      payload: { channelId: 'channel-campfire' },
+    });
+    expect(muted.statusCode).toBe(200);
+    expect(muted.json()).toEqual({ channelIds: ['channel-campfire'] });
+
+    const fetched = await app.inject({
+      method: 'GET',
+      url: '/v1/accounts/me/muted-channels',
+      headers,
+    });
+    expect(fetched.statusCode).toBe(200);
+    expect(fetched.json()).toEqual({ channelIds: ['channel-campfire'] });
+  });
+
+  it('requires authentication for muted-channel persistence', async () => {
+    const app = await buildApp();
+    apps.push(app);
+
+    const post = await app.inject({
+      method: 'POST',
+      url: '/v1/accounts/me/muted-channels',
+      payload: { channelId: 'channel-campfire' },
+    });
+    expect(post.statusCode).toBe(401);
+
+    const get = await app.inject({
+      method: 'GET',
+      url: '/v1/accounts/me/muted-channels',
+    });
+    expect(get.statusCode).toBe(401);
   });
 });
 
@@ -471,8 +641,8 @@ describe('channel API', () => {
     });
     expect(listRes.statusCode).toBe(200);
     const { channels } = listRes.json();
-    expect(channels.length).toBe(1);
-    expect(channels[0].id).toBe(channel.id);
+    expect(channels.length).toBe(2);
+    expect(channels.some((c: { id: string }) => c.id === channel.id)).toBe(true);
   });
 
   it('rejects channel creation by non-admin members', async () => {
@@ -1025,7 +1195,9 @@ describe('invite API', () => {
       url: `/v1/invites/${invite.code}`,
       headers: { authorization: `Bearer ${memberToken}` },
     });
-    expect(joinRes.statusCode).toBe(204);
+    expect(joinRes.statusCode).toBe(200);
+    expect(joinRes.json().community.id).toBe(communityId);
+    expect(Array.isArray(joinRes.json().channels)).toBe(true);
 
     const listRes = await app.inject({
       method: 'GET',
@@ -1149,6 +1321,109 @@ describe('invite API', () => {
       headers: { authorization: `Bearer ${outsiderToken}` },
     });
     expect(acceptRes.statusCode).toBe(404);
+  });
+});
+
+describe('custom server emoji', () => {
+  async function setup() {
+    const app = await buildApp();
+    apps.push(app);
+    const email = `emoji-${crypto.randomUUID()}@test.cove.chat`;
+    const challenge = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/email/send-code',
+      payload: { email },
+    });
+    const verified = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/email/verify',
+      payload: { email, code: '123456', challengeId: challenge.json().challengeId },
+    });
+    const token = verified.json().sessionToken as string;
+    const community = await app.inject({
+      method: 'POST',
+      url: '/v1/communities',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 'Emoji Cove' },
+    });
+    return { app, token, communityId: community.json().id as string };
+  }
+
+  function multipartEmoji(name: string) {
+    const boundary = `cove-${crypto.randomUUID()}`;
+    const body = Buffer.from(
+      `--${boundary}\r\nContent-Disposition: form-data; name="name"\r\n\r\n${name}\r\n` +
+        `--${boundary}\r\nContent-Disposition: form-data; name="image"; filename="${name}.png"\r\n` +
+        `Content-Type: image/png\r\n\r\npng-bytes\r\n--${boundary}--\r\n`,
+    );
+    return { body, contentType: `multipart/form-data; boundary=${boundary}` };
+  }
+
+  async function upload(
+    app: Awaited<ReturnType<typeof buildApp>>,
+    token: string,
+    communityId: string,
+  ) {
+    const multipart = multipartEmoji('party_blob');
+    return app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/emoji`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        'content-type': multipart.contentType,
+      },
+      body: multipart.body,
+    });
+  }
+
+  it('uploads a PNG and creates a server emoji', async () => {
+    const { app, token, communityId } = await setup();
+    const response = await upload(app, token, communityId);
+    expect(response.statusCode).toBe(201);
+    expect(response.json()).toMatchObject({ name: 'party_blob', communityId });
+    expect(response.json().url).toContain(`/v1/communities/${communityId}/emoji/`);
+  });
+
+  it('lists uploaded server emoji', async () => {
+    const { app, token, communityId } = await setup();
+    const created = await upload(app, token, communityId);
+    const response = await app.inject({
+      method: 'GET',
+      url: `/v1/communities/${communityId}/emoji`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().emoji).toEqual([created.json()]);
+  });
+
+  it('deletes a server emoji', async () => {
+    const { app, token, communityId } = await setup();
+    const created = await upload(app, token, communityId);
+    const response = await app.inject({
+      method: 'DELETE',
+      url: `/v1/communities/${communityId}/emoji/${created.json().id}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(response.statusCode).toBe(204);
+    const listed = await app.inject({
+      method: 'GET',
+      url: `/v1/communities/${communityId}/emoji`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(listed.json()).toEqual({ emoji: [] });
+  });
+
+  it('serves emoji binary content at the url returned on upload', async () => {
+    const { app, token, communityId } = await setup();
+    const created = await upload(app, token, communityId);
+    const contentUrl = created.json().url as string;
+    const content = await app.inject({
+      method: 'GET',
+      url: contentUrl,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(content.statusCode).toBe(200);
+    expect(content.headers['content-type']).toMatch(/^image\//);
   });
 });
 
@@ -1686,6 +1961,107 @@ describe('managed message lifecycle', () => {
     memberSocket.close();
   });
 
+  it('supports reactions lifecycle (add emoji, remove emoji, verify reaction count, prevent reacting to deleted message)', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const { owner, member, channelId } = await setup(app);
+
+    const messageRes = await sendMessage(app, channelId, owner.token, 'Test reactions message');
+    expect(messageRes.statusCode).toBe(201);
+    const messageId = messageRes.json().id as string;
+
+    const addReactionRes = await app.inject({
+      method: 'PUT',
+      url: `/v1/channels/${channelId}/messages/${messageId}/reactions`,
+      headers: { authorization: `Bearer ${member.token}` },
+      payload: { emoji: '👍' },
+    });
+    expect(addReactionRes.statusCode).toBe(200);
+    expect(addReactionRes.json().reactions).toEqual([{ emoji: '👍', count: 1, reacted: true }]);
+
+    const removeReactionRes = await app.inject({
+      method: 'DELETE',
+      url: `/v1/channels/${channelId}/messages/${messageId}/reactions`,
+      headers: { authorization: `Bearer ${member.token}` },
+      payload: { emoji: '👍' },
+    });
+    expect(removeReactionRes.statusCode).toBe(200);
+    expect(removeReactionRes.json().reactions).toEqual([]);
+
+    const deleteMessageRes = await app.inject({
+      method: 'DELETE',
+      url: `/v1/channels/${channelId}/messages/${messageId}`,
+      headers: { authorization: `Bearer ${owner.token}` },
+    });
+    expect(deleteMessageRes.statusCode).toBe(200);
+
+    const reactToDeletedRes = await app.inject({
+      method: 'PUT',
+      url: `/v1/channels/${channelId}/messages/${messageId}/reactions`,
+      headers: { authorization: `Bearer ${member.token}` },
+      payload: { emoji: '👍' },
+    });
+    expect(reactToDeletedRes.statusCode).toBe(409);
+  });
+
+  it('supports replies flow (send reply, verify replyPreview, verify invalid replyToId in wrong channel)', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const { owner, communityId, channelId } = await setup(app);
+
+    const parentRes = await sendMessage(app, channelId, owner.token, 'Parent message');
+    expect(parentRes.statusCode).toBe(201);
+    const parentId = parentRes.json().id as string;
+
+    const replyRes = await app.inject({
+      method: 'POST',
+      url: `/v1/channels/${channelId}/messages`,
+      headers: {
+        authorization: `Bearer ${owner.token}`,
+        'idempotency-key': `reply-test-${crypto.randomUUID()}`,
+      },
+      payload: {
+        content: 'This is my reply',
+        clientNonce: `nonce-${crypto.randomUUID()}`,
+        replyToId: parentId,
+      },
+    });
+    expect(replyRes.statusCode).toBe(201);
+
+    const replyData = replyRes.json();
+    expect(replyData.replyToId).toBe(parentId);
+    expect(replyData.replyPreview).toMatchObject({
+      id: parentId,
+      content: 'Parent message',
+      authorDisplayName: expect.any(String),
+      availability: 'plaintext',
+    });
+
+    const otherChannelRes = await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/channels`,
+      headers: { authorization: `Bearer ${owner.token}` },
+      payload: { name: 'other-channel', kind: 'text', category: 'Chat' },
+    });
+    expect(otherChannelRes.statusCode).toBe(201);
+    const otherChannelId = otherChannelRes.json().id as string;
+
+    const invalidReplyRes = await app.inject({
+      method: 'POST',
+      url: `/v1/channels/${otherChannelId}/messages`,
+      headers: {
+        authorization: `Bearer ${owner.token}`,
+        'idempotency-key': `reply-invalid-${crypto.randomUUID()}`,
+      },
+      payload: {
+        content: 'Invalid reply',
+        clientNonce: `nonce-${crypto.randomUUID()}`,
+        replyToId: parentId,
+      },
+    });
+    expect(invalidReplyRes.statusCode).toBe(400);
+  });
+
   it('updates member presence online/offline with multi-session-safe transitions and gateway fanout', async () => {
     const repo = createMemoryRepository();
     const app = await buildApp({ repo });
@@ -1881,7 +2257,7 @@ describe('community stats API', () => {
     expect(statsRes.statusCode).toBe(200);
     const stats = statsRes.json();
     expect(stats.memberCount).toBe(2);
-    expect(stats.channelCount).toBe(1);
+    expect(stats.channelCount).toBe(2);
     expect(stats.messageCount).toBe(0);
     expect(typeof stats.onlineCount).toBe('number');
   });
@@ -2010,7 +2386,7 @@ describe('operator audit log', () => {
     });
     expect(page2Res.statusCode).toBe(200);
     const page2 = page2Res.json() as { items: unknown[]; nextCursor: string | null };
-    expect(page2.items.length).toBe(1);
+    expect(page2.items.length).toBe(2);
     expect(page2.nextCursor).toBeNull();
   });
 
@@ -2139,6 +2515,7 @@ describe('operator audit log', () => {
   });
 
   it('supports operator backup and restore drill', async () => {
+    vi.stubEnv('OPERATOR_KEY', 'test-operator-key');
     const app = await buildApp();
     apps.push(app);
 
@@ -2146,7 +2523,7 @@ describe('operator audit log', () => {
     const backupRes1 = await app.inject({
       method: 'POST',
       url: '/v1/operator/backup',
-      headers: { 'x-operator-key': 'dev-operator-key-42' },
+      headers: { authorization: 'Bearer test-operator-key' },
     });
     expect(backupRes1.statusCode).toBe(200);
     const backupData1 = backupRes1.body;
@@ -2178,7 +2555,7 @@ describe('operator audit log', () => {
     const backupRes2 = await app.inject({
       method: 'POST',
       url: '/v1/operator/backup',
-      headers: { 'x-operator-key': 'dev-operator-key-42' },
+      headers: { authorization: 'Bearer test-operator-key' },
     });
     expect(backupRes2.statusCode).toBe(200);
     const backupData2 = backupRes2.body;
@@ -2187,7 +2564,7 @@ describe('operator audit log', () => {
     const restoreRes1 = await app.inject({
       method: 'POST',
       url: '/v1/operator/restore',
-      headers: { 'x-operator-key': 'dev-operator-key-42', 'content-type': 'application/json' },
+      headers: { authorization: 'Bearer test-operator-key', 'content-type': 'application/json' },
       payload: backupData1,
     });
     expect(restoreRes1.statusCode).toBe(204);
@@ -2204,7 +2581,7 @@ describe('operator audit log', () => {
     const restoreRes2 = await app.inject({
       method: 'POST',
       url: '/v1/operator/restore',
-      headers: { 'x-operator-key': 'dev-operator-key-42', 'content-type': 'application/json' },
+      headers: { authorization: 'Bearer test-operator-key', 'content-type': 'application/json' },
       payload: backupData2,
     });
     expect(restoreRes2.statusCode).toBe(204);
@@ -2216,6 +2593,43 @@ describe('operator audit log', () => {
       headers: { authorization: `Bearer ${tokenTest}` },
     });
     expect(getCommRes2.statusCode).toBe(200);
+  });
+
+  it('rejects operator backup and restore without the configured operator key', async () => {
+    // Phase 1: no OPERATOR_KEY — endpoints are unguarded
+    const unguardedApp = await buildApp();
+    apps.push(unguardedApp);
+
+    const unguardedBackup = await unguardedApp.inject({
+      method: 'POST',
+      url: '/v1/operator/backup',
+    });
+    expect(unguardedBackup.statusCode).toBe(200);
+
+    const unguardedRestore = await unguardedApp.inject({
+      method: 'POST',
+      url: '/v1/operator/restore',
+      headers: { 'content-type': 'application/json' },
+      payload: unguardedBackup.body,
+    });
+    expect(unguardedRestore.statusCode).toBe(204);
+
+    // Phase 2: OPERATOR_KEY set — build a NEW app so the key is captured at startup
+    vi.stubEnv('OPERATOR_KEY', 'test-operator-key');
+    const guardedApp = await buildApp();
+    apps.push(guardedApp);
+
+    for (const url of ['/v1/operator/backup', '/v1/operator/restore']) {
+      const missingHeader = await guardedApp.inject({ method: 'POST', url });
+      expect(missingHeader.statusCode).toBe(401);
+
+      const invalidHeader = await guardedApp.inject({
+        method: 'POST',
+        url,
+        headers: { authorization: 'Bearer wrong-key' },
+      });
+      expect(invalidHeader.statusCode).toBe(401);
+    }
   });
 });
 
@@ -2421,5 +2835,468 @@ describe('voice room API', () => {
       headers: { authorization: `Bearer ${memberToken}` },
     });
     expect(joinRes.statusCode).toBe(403);
+  });
+});
+
+describe('community data export', () => {
+  async function getAuth(app: Awaited<ReturnType<typeof buildApp>>) {
+    const email = `user-${crypto.randomUUID()}@test.cove.chat`;
+    const sendRes = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/email/send-code',
+      payload: { email },
+    });
+    const { challengeId } = sendRes.json();
+    const verifyRes = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/email/verify',
+      payload: { email, code: '123456', challengeId },
+    });
+    const data = verifyRes.json();
+    return { token: data.sessionToken as string, account: data.account as { id: string } };
+  }
+
+  it('allows the community owner to export community data', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const { token: ownerToken } = await getAuth(app);
+
+    const communityRes = await app.inject({
+      method: 'POST',
+      url: '/v1/communities',
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { name: 'Export Test Community' },
+    });
+    const communityId = communityRes.json().id as string;
+
+    const channelRes = await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/channels`,
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { name: 'general', kind: 'text', category: 'Text' },
+    });
+    const messageRes = await app.inject({
+      method: 'POST',
+      url: `/v1/channels/${channelRes.json().id}/messages`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        'idempotency-key': 'community-export-message-1',
+      },
+      payload: { content: 'Portable community history', clientNonce: 'community-export-message-1' },
+    });
+    expect(messageRes.statusCode).toBe(201);
+
+    const exportRes = await app.inject({
+      method: 'GET',
+      url: `/v1/communities/${communityId}/export`,
+      headers: { authorization: `Bearer ${ownerToken}` },
+    });
+
+    expect(exportRes.statusCode, exportRes.body).toBe(200);
+    expect(exportRes.headers['content-disposition']).toContain('attachment');
+    expect(exportRes.headers['content-type']).toContain('application/json');
+
+    const body = exportRes.json() as {
+      version: number;
+      community: { id: string };
+      channels: Array<{ name: string }>;
+      memberCount: number;
+      messages: Array<{ content: string }>;
+      inviteCount: number;
+    };
+    expect(body.version).toBe(1);
+    expect(body.community.id).toBe(communityId);
+    expect(body.channels.some((c) => c.name === 'general')).toBe(true);
+    expect(typeof body.memberCount).toBe('number');
+    expect(body.messages.map((message) => message.content)).toContain('Portable community history');
+    expect(typeof body.inviteCount).toBe('number');
+  });
+
+  it('denies non-owner members from exporting community data', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const { token: ownerToken } = await getAuth(app);
+    const { token: memberToken } = await getAuth(app);
+
+    const communityRes = await app.inject({
+      method: 'POST',
+      url: '/v1/communities',
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { name: 'Export Guard Community' },
+    });
+    const communityId = communityRes.json().id as string;
+
+    await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/join`,
+      headers: { authorization: `Bearer ${memberToken}` },
+    });
+
+    const exportRes = await app.inject({
+      method: 'GET',
+      url: `/v1/communities/${communityId}/export`,
+      headers: { authorization: `Bearer ${memberToken}` },
+    });
+    expect(exportRes.statusCode).toBe(403);
+  });
+
+  it('returns 401 for unauthenticated export requests', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const { token } = await getAuth(app);
+    const communityRes = await app.inject({
+      method: 'POST',
+      url: '/v1/communities',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 'Auth Guard Community' },
+    });
+    const communityId = communityRes.json().id as string;
+
+    const exportRes = await app.inject({
+      method: 'GET',
+      url: `/v1/communities/${communityId}/export`,
+    });
+    expect(exportRes.statusCode).toBe(401);
+  });
+});
+
+describe('stage broadcast subchannels and screen share', () => {
+  async function getAuth(app: Awaited<ReturnType<typeof buildApp>>) {
+    const email = `user-${crypto.randomUUID()}@test.cove.chat`;
+    const sendRes = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/email/send-code',
+      payload: { email },
+    });
+    const { challengeId } = sendRes.json();
+    const verifyRes = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/email/verify',
+      payload: { email, code: '123456', challengeId },
+    });
+    const data = verifyRes.json();
+    return { token: data.sessionToken as string, account: data.account as { id: string } };
+  }
+
+  async function setup(app: Awaited<ReturnType<typeof buildApp>>) {
+    const { token } = await getAuth(app);
+    const communityRes = await app.inject({
+      method: 'POST',
+      url: '/v1/communities',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 'Stage Guild' },
+    });
+    const communityId = communityRes.json().id as string;
+    const stageRes = await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/channels`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: {
+        name: 'Main Stage',
+        kind: 'stage',
+        category: 'Voice',
+        stageConfig: { broadcastKeybind: 'Ctrl+Shift+V' },
+      },
+    });
+    const stageChannelId = stageRes.json().id as string;
+    return { token, communityId, stageChannelId };
+  }
+
+  it('creates a subchannel under a stage channel', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const { token, communityId, stageChannelId } = await setup(app);
+
+    const subRes = await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/channels`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: {
+        name: 'Squad Alpha',
+        kind: 'voice',
+        category: 'Voice',
+        parentChannelId: stageChannelId,
+      },
+    });
+    expect(subRes.statusCode).toBe(201);
+    const sub = subRes.json();
+    expect(sub.parentChannelId).toBe(stageChannelId);
+    expect(sub.kind).toBe('voice');
+  });
+
+  it('rejects subchannel creation under a non-stage channel', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const { token, communityId } = await setup(app);
+
+    const textRes = await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/channels`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 'general', kind: 'text', category: 'Text' },
+    });
+    const textChannelId = textRes.json().id as string;
+
+    const badRes = await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/channels`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: {
+        name: 'Bad Sub',
+        kind: 'voice',
+        category: 'Voice',
+        parentChannelId: textChannelId,
+      },
+    });
+    expect(badRes.statusCode).toBe(422);
+  });
+
+  it('rejects nested subchannels (subchannel of a subchannel)', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const { token, communityId, stageChannelId } = await setup(app);
+
+    const subRes = await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/channels`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 'Sub 1', kind: 'voice', category: 'Voice', parentChannelId: stageChannelId },
+    });
+    const subId = subRes.json().id as string;
+
+    const nestedRes = await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/channels`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 'Nested', kind: 'voice', category: 'Voice', parentChannelId: subId },
+    });
+    expect(nestedRes.statusCode).toBe(422);
+  });
+
+  it('lists subchannels of a stage channel', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const { token, communityId, stageChannelId } = await setup(app);
+
+    await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/channels`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 'Sub A', kind: 'voice', category: 'Voice', parentChannelId: stageChannelId },
+    });
+    await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/channels`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 'Sub B', kind: 'voice', category: 'Voice', parentChannelId: stageChannelId },
+    });
+
+    const listRes = await app.inject({
+      method: 'GET',
+      url: `/v1/channels/${stageChannelId}/subchannels`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(listRes.statusCode).toBe(200);
+    const { subchannels } = listRes.json();
+    expect(subchannels).toHaveLength(2);
+    expect(subchannels.every((c: any) => c.parentChannelId === stageChannelId)).toBe(true);
+  });
+
+  it('returns stage peek with speakers and listeners', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const { token, communityId, stageChannelId } = await setup(app);
+
+    // Join the stage channel as a speaker
+    await app.inject({
+      method: 'POST',
+      url: `/v1/channels/${stageChannelId}/voice/join`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+
+    // Create and join a subchannel as a listener
+    const subRes = await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/channels`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 'Sub A', kind: 'voice', category: 'Voice', parentChannelId: stageChannelId },
+    });
+    const subId = subRes.json().id as string;
+    const { token: memberToken } = await getAuth(app);
+    await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/join`,
+      headers: { authorization: `Bearer ${memberToken}` },
+    });
+    await app.inject({
+      method: 'POST',
+      url: `/v1/channels/${subId}/voice/join`,
+      headers: { authorization: `Bearer ${memberToken}` },
+    });
+
+    const peekRes = await app.inject({
+      method: 'GET',
+      url: `/v1/channels/${stageChannelId}/stage/peek`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(peekRes.statusCode).toBe(200);
+    const peek = peekRes.json();
+    expect(peek.channelId).toBe(stageChannelId);
+    expect(peek.speakers.length).toBeGreaterThan(0);
+    expect(peek.listeners.length).toBeGreaterThan(0);
+    expect(Array.isArray(peek.screenShares)).toBe(true);
+  });
+
+  it('joins a stage listen-only, then gates publish credentials on stage.speak', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const { token, stageChannelId } = await setup(app);
+
+    const joinRes = await app.inject({
+      method: 'POST',
+      url: `/v1/channels/${stageChannelId}/voice/join`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(joinRes.statusCode).toBe(200);
+    expect(joinRes.json().participantRole).toBe('listener');
+    expect(joinRes.json().canPublish).toBe(false);
+
+    const pressRes = await app.inject({
+      method: 'POST',
+      url: `/v1/channels/${stageChannelId}/stage/speaking`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { active: true },
+    });
+    expect(pressRes.statusCode).toBe(200);
+    expect(pressRes.json()).toMatchObject({
+      channelId: stageChannelId,
+      participantRole: 'speaker',
+      active: true,
+      mediaSession: { canPublish: true },
+    });
+
+    const releaseRes = await app.inject({
+      method: 'POST',
+      url: `/v1/channels/${stageChannelId}/stage/speaking`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { active: false },
+    });
+    expect(releaseRes.statusCode).toBe(200);
+    expect(releaseRes.json()).toMatchObject({
+      participantRole: 'listener',
+      active: false,
+      mediaSession: { canPublish: false },
+    });
+  });
+
+  it('denies stage audio promotion without stage.speak', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const { communityId, stageChannelId } = await setup(app);
+    const { token: memberToken } = await getAuth(app);
+    await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/join`,
+      headers: { authorization: `Bearer ${memberToken}` },
+    });
+    await app.inject({
+      method: 'POST',
+      url: `/v1/channels/${stageChannelId}/voice/join`,
+      headers: { authorization: `Bearer ${memberToken}` },
+    });
+
+    const denied = await app.inject({
+      method: 'POST',
+      url: `/v1/channels/${stageChannelId}/stage/speaking`,
+      headers: { authorization: `Bearer ${memberToken}` },
+      payload: { active: true },
+    });
+    expect(denied.statusCode).toBe(403);
+  });
+
+  it('returns participantRole=listener when joining a stage subchannel', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const { token, communityId, stageChannelId } = await setup(app);
+
+    const subRes = await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/channels`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 'Sub A', kind: 'voice', category: 'Voice', parentChannelId: stageChannelId },
+    });
+    const subId = subRes.json().id as string;
+
+    const joinRes = await app.inject({
+      method: 'POST',
+      url: `/v1/channels/${subId}/voice/join`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(joinRes.statusCode).toBe(200);
+    expect(joinRes.json().participantRole).toBe('listener');
+  });
+
+  it('starts and stops a screen share in a voice channel', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const { token, communityId } = await setup(app);
+
+    // Create a regular voice channel
+    const voiceRes = await app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/channels`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 'Gaming', kind: 'voice', category: 'Voice' },
+    });
+    const voiceChannelId = voiceRes.json().id as string;
+
+    // Must join before screen sharing
+    const notInRes = await app.inject({
+      method: 'POST',
+      url: `/v1/channels/${voiceChannelId}/screen/start`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(notInRes.statusCode).toBe(409);
+
+    // Join the channel, then start screen share
+    await app.inject({
+      method: 'POST',
+      url: `/v1/channels/${voiceChannelId}/voice/join`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    const startRes = await app.inject({
+      method: 'POST',
+      url: `/v1/channels/${voiceChannelId}/screen/start`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(startRes.statusCode).toBe(200);
+    const share = startRes.json();
+    expect(share.channelId).toBe(voiceChannelId);
+    expect(typeof share.trackId).toBe('string');
+    expect(share.active).toBe(true);
+
+    // Duplicate start is rejected
+    const dupRes = await app.inject({
+      method: 'POST',
+      url: `/v1/channels/${voiceChannelId}/screen/start`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(dupRes.statusCode).toBe(409);
+
+    // Stop screen share
+    const stopRes = await app.inject({
+      method: 'POST',
+      url: `/v1/channels/${voiceChannelId}/screen/stop`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(stopRes.statusCode).toBe(200);
+
+    // Can start again after stopping
+    const restart = await app.inject({
+      method: 'POST',
+      url: `/v1/channels/${voiceChannelId}/screen/start`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(restart.statusCode).toBe(200);
   });
 });

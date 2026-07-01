@@ -3,6 +3,7 @@ import {
   channelPrivacyPolicySchema,
   channelSchema,
   communityStatsSchema,
+  communityExportSchema,
   createInviteRequestSchema,
   createRoleRequestSchema,
   auditEventSchema,
@@ -17,6 +18,11 @@ import {
   presenceUpdateSchema,
   voiceParticipantJoinedSchema,
   voiceParticipantLeftSchema,
+  stageParticipantsSchema,
+  screenShareStartedSchema,
+  screenShareEndedSchema,
+  stageSpeakingStateSchema,
+  createChannelRequestSchema,
 } from './index.js';
 
 describe('privacy contracts', () => {
@@ -312,6 +318,39 @@ describe('presence contracts', () => {
   });
 });
 
+describe('community export contract', () => {
+  it('validates a minimal community export bundle', () => {
+    const channel = demoBootstrap.channels[0]!;
+    const community = demoBootstrap.communities[0]!;
+    const result = communityExportSchema.safeParse({
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      community,
+      channels: [channel],
+      roles: [],
+      memberCount: 3,
+      messages: [],
+      inviteCount: 0,
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects export bundles with wrong version', () => {
+    const community = demoBootstrap.communities[0]!;
+    const result = communityExportSchema.safeParse({
+      version: 2,
+      exportedAt: new Date().toISOString(),
+      community,
+      channels: [],
+      roles: [],
+      memberCount: 0,
+      messages: [],
+      inviteCount: 0,
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
 describe('voice participant event contracts', () => {
   it('validates voice.participant.joined and voice.participant.left payloads', () => {
     const joined = voiceParticipantJoinedSchema.safeParse({
@@ -334,5 +373,122 @@ describe('voice participant event contracts', () => {
     expect(left.success).toBe(true);
 
     expect(voiceParticipantLeftSchema.safeParse({ channelId: 'channel-1' }).success).toBe(false);
+  });
+
+  it('accepts participant with optional participantRole', () => {
+    const joined = voiceParticipantJoinedSchema.safeParse({
+      channelId: 'channel-1',
+      participant: {
+        id: 'acc-1',
+        displayName: 'Ren',
+        initials: 'R',
+        status: 'online',
+        participantRole: 'speaker',
+      },
+    });
+    expect(joined.success).toBe(true);
+
+    const listener = voiceParticipantJoinedSchema.safeParse({
+      channelId: 'sub-1',
+      participant: {
+        id: 'acc-2',
+        displayName: 'Sam',
+        initials: 'S',
+        status: 'online',
+        participantRole: 'listener',
+      },
+    });
+    expect(listener.success).toBe(true);
+  });
+});
+
+describe('stage and screen-share contracts', () => {
+  it('validates keybind-gated stage speaking state', () => {
+    const result = stageSpeakingStateSchema.safeParse({
+      channelId: 'stage-1',
+      participantId: 'acc-1',
+      participantRole: 'speaker',
+      active: true,
+      mediaSession: {
+        token: 'token',
+        url: 'wss://media.example',
+        roomName: 'room-stage-1',
+        participantId: 'acc-1',
+        canPublish: true,
+      },
+    });
+    expect(result.success).toBe(true);
+    expect(
+      stageSpeakingStateSchema.safeParse({ channelId: 'stage-1', active: 'yes' }).success,
+    ).toBe(false);
+  });
+
+  it('validates stageParticipantsSchema', () => {
+    const result = stageParticipantsSchema.safeParse({
+      channelId: 'stage-1',
+      speakers: [
+        {
+          id: 'acc-1',
+          displayName: 'Ren',
+          initials: 'R',
+          status: 'online',
+          participantRole: 'speaker',
+        },
+      ],
+      listeners: [
+        {
+          id: 'acc-2',
+          displayName: 'Sam',
+          initials: 'S',
+          status: 'online',
+          participantRole: 'listener',
+        },
+      ],
+      screenShares: [{ participantId: 'acc-1', trackId: 'track-abc' }],
+    });
+    expect(result.success).toBe(true);
+    expect(result.data?.speakers).toHaveLength(1);
+    expect(result.data?.listeners).toHaveLength(1);
+    expect(result.data?.screenShares).toHaveLength(1);
+  });
+
+  it('validates screenShareStartedSchema', () => {
+    expect(
+      screenShareStartedSchema.safeParse({
+        channelId: 'ch-1',
+        participantId: 'acc-1',
+        trackId: 'track-1',
+      }).success,
+    ).toBe(true);
+    expect(
+      screenShareStartedSchema.safeParse({ channelId: 'ch-1', participantId: 'acc-1' }).success,
+    ).toBe(false);
+  });
+
+  it('validates screenShareEndedSchema', () => {
+    expect(
+      screenShareEndedSchema.safeParse({ channelId: 'ch-1', participantId: 'acc-1' }).success,
+    ).toBe(true);
+    expect(screenShareEndedSchema.safeParse({ channelId: '' }).success).toBe(false);
+  });
+
+  it('accepts createChannelRequestSchema with parentChannelId and stageConfig', () => {
+    const sub = createChannelRequestSchema.safeParse({
+      name: 'Squad Alpha',
+      kind: 'voice',
+      category: 'Voice',
+      parentChannelId: 'stage-1',
+    });
+    expect(sub.success).toBe(true);
+    expect(sub.data?.parentChannelId).toBe('stage-1');
+
+    const stage = createChannelRequestSchema.safeParse({
+      name: 'Main Stage',
+      kind: 'stage',
+      category: 'Voice',
+      stageConfig: { broadcastKeybind: 'Ctrl+Shift+V' },
+    });
+    expect(stage.success).toBe(true);
+    expect(stage.data?.stageConfig?.broadcastKeybind).toBe('Ctrl+Shift+V');
   });
 });

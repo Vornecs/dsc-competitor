@@ -485,5 +485,8 @@ export function createMemoryRepository(): Repository {
         bansByCommunity.set(ban.communityId, list);
       }
     },
+    async reconcileVoiceParticipants() {
+      // In-memory repository starts fresh/empty, so no-op
+    },
   };
 }

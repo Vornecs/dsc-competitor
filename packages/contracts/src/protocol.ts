@@ -39,12 +39,16 @@ export const presenceUpdateSchema = z.object({
 });
 export type PresenceUpdate = z.infer<typeof presenceUpdateSchema>;
 
-export const participantSchema = accountSchema.pick({
-  id: true,
-  displayName: true,
-  initials: true,
-  status: true,
-});
+export const participantSchema = accountSchema
+  .pick({
+    id: true,
+    displayName: true,
+    initials: true,
+    status: true,
+  })
+  .extend({
+    participantRole: z.enum(['speaker', 'listener']).optional(),
+  });
 export type Participant = z.infer<typeof participantSchema>;
 
 export const stageConfigSchema = z.object({
@@ -74,6 +78,18 @@ export const communitySchema = z.object({
   memberCount: z.number().int().nonnegative(),
 });
 export type Community = z.infer<typeof communitySchema>;
+
+export const serverEmojiSchema = z.object({
+  id: z.string().min(1),
+  name: z
+    .string()
+    .min(1)
+    .max(32)
+    .regex(/^[\w-]+$/),
+  url: z.string().min(1),
+  communityId: z.string().min(1),
+});
+export type ServerEmoji = z.infer<typeof serverEmojiSchema>;
 
 export const messageAuthorSchema = accountSchema.pick({
   id: true,
@@ -372,6 +388,8 @@ export const createChannelRequestSchema = z.object({
   category: z.string().min(1).max(80),
   topic: z.string().max(240).optional(),
   privacy: channelPrivacyPolicySchema.optional(),
+  parentChannelId: z.string().min(1).optional(),
+  stageConfig: stageConfigSchema.optional(),
 });
 export type CreateChannelRequest = z.infer<typeof createChannelRequestSchema>;
 
@@ -380,8 +398,45 @@ export const voiceSessionSchema = z.object({
   url: z.string().min(1),
   roomName: z.string().min(1),
   participantId: z.string().min(1),
+  participantRole: z.enum(['speaker', 'listener']).optional(),
+  canPublish: z.boolean().optional(),
 });
 export type VoiceSession = z.infer<typeof voiceSessionSchema>;
+
+export const stageParticipantsSchema = z.object({
+  channelId: z.string().min(1),
+  speakers: z.array(participantSchema),
+  listeners: z.array(participantSchema),
+  screenShares: z.array(
+    z.object({
+      participantId: z.string().min(1),
+      trackId: z.string().min(1),
+    }),
+  ),
+});
+export type StageParticipants = z.infer<typeof stageParticipantsSchema>;
+
+export const stageSpeakingStateSchema = z.object({
+  channelId: z.string().min(1),
+  participantId: z.string().min(1),
+  participantRole: z.enum(['speaker', 'listener']),
+  active: z.boolean(),
+  mediaSession: voiceSessionSchema,
+});
+export type StageSpeakingState = z.infer<typeof stageSpeakingStateSchema>;
+
+export const screenShareStartedSchema = z.object({
+  channelId: z.string().min(1),
+  participantId: z.string().min(1),
+  trackId: z.string().min(1),
+});
+export type ScreenShareStarted = z.infer<typeof screenShareStartedSchema>;
+
+export const screenShareEndedSchema = z.object({
+  channelId: z.string().min(1),
+  participantId: z.string().min(1),
+});
+export type ScreenShareEnded = z.infer<typeof screenShareEndedSchema>;
 
 export const voiceParticipantJoinedSchema = z.object({
   channelId: z.string().min(1),
@@ -537,3 +592,15 @@ export const banMemberRequestSchema = z.object({
   reason: z.string().max(512).optional(),
 });
 export type BanMemberRequest = z.infer<typeof banMemberRequestSchema>;
+
+export const communityExportSchema = z.object({
+  version: z.literal(1),
+  exportedAt: z.string().datetime(),
+  community: communitySchema,
+  channels: z.array(channelSchema),
+  roles: z.array(roleSchema),
+  memberCount: z.number().int().nonnegative(),
+  messages: z.array(messageSchema),
+  inviteCount: z.number().int().nonnegative(),
+});
+export type CommunityExport = z.infer<typeof communityExportSchema>;

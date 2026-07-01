@@ -184,4 +184,7 @@ export interface Repository {
   // -- Backup & Restore -----------------------------------------------------
   exportBackup(): Promise<string>;
   importBackup(backupJson: string): Promise<void>;
+
+  // -- Voice participant reconciliation -------------------------------------
+  reconcileVoiceParticipants(): Promise<void>;
 }

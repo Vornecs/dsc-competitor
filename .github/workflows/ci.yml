@@ -18,7 +18,9 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      - run: npm test
-      - run: npm run typecheck
       - run: npm run build
+      - name: Install virtual display (uiohook-napi needs an X server to probe)
+        run: sudo apt-get update && sudo apt-get install -y xvfb
+      - run: xvfb-run -a npm test
+      - run: npm run typecheck
       - run: npm run format:check

@@ -29,6 +29,8 @@ import {
   communityStatsSchema,
   banMemberRequestSchema,
   banSchema,
+  communityExportSchema,
+  stageParticipantsSchema,
   type Attachment,
   type AttentionItem,
   type BootstrapState,
@@ -50,16 +52,19 @@ import {
   type Ban,
   type Participant,
   type VoiceSession,
+  type CommunityExport,
+  type StageParticipants,
 } from '@cove/contracts';
 import type { ObjectStorage } from './object-storage.js';
 import { createMemoryObjectStorage } from './object-storage.js';
-import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify';
+import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import type { WebSocket } from 'ws';
 import type { Membership, Repository } from './repository.js';
 import { createMemoryRepository } from './memory-repository.js';
 import type { GatewayCoordinator } from './gateway-coordinator.js';
 import { createMemoryGatewayCoordinator } from './memory-gateway-coordinator.js';
 import { type MediaProvider, FakeMediaProvider } from './media-provider.js';
+import { Resend } from 'resend';
 
 const account = demoBootstrap.account;
 
@@ -274,6 +279,59 @@ const ALLOWED_MIME_TYPES = new Set([
   'text/plain',
 ]);
 const MAX_ATTACHMENT_BYTES = 26_214_400; // 25 MB
+const MAX_EMOJI_BYTES = 256 * 1024;
+const ALLOWED_EMOJI_MIME_TYPES = new Set(['image/png', 'image/gif']);
+type ServerEmoji = {
+  id: string;
+  name: string;
+  url: string;
+  communityId: string;
+};
+
+function parseEmojiMultipart(
+  body: Buffer,
+  contentType: string | undefined,
+): { name: string; filename: string; mimeType: string; data: Buffer } | undefined {
+  const boundary = contentType
+    ?.match(/boundary=(?:"([^"]+)"|([^;]+))/i)
+    ?.slice(1)
+    .find(Boolean);
+  if (!boundary) return undefined;
+
+  const marker = Buffer.from(`--${boundary}`);
+  const headerSeparator = Buffer.from('\r\n\r\n');
+  let name: string | undefined;
+  let file: { filename: string; mimeType: string; data: Buffer } | undefined;
+
+  let cursor = body.indexOf(marker);
+  while (cursor >= 0) {
+    const partStart = cursor + marker.length;
+    const nextBoundary = body.indexOf(marker, partStart);
+    if (nextBoundary < 0) break;
+    const part = body.subarray(partStart, nextBoundary);
+    const headersEnd = part.indexOf(headerSeparator);
+    if (headersEnd >= 0) {
+      const headers = part.subarray(0, headersEnd).toString('utf8');
+      const rawContent = part.subarray(headersEnd + headerSeparator.length);
+      const content = rawContent.subarray(-2).equals(Buffer.from('\r\n'))
+        ? rawContent.subarray(0, rawContent.length - 2)
+        : rawContent;
+      const fieldName = headers.match(/name="([^"]+)"/i)?.[1];
+      const filename = headers.match(/filename="([^"]+)"/i)?.[1];
+      if (fieldName === 'name' && !filename) name = content.toString('utf8');
+      if (fieldName === 'image' && filename) {
+        file = {
+          filename,
+          mimeType: headers.match(/content-type:\s*([^\r\n]+)/i)?.[1]?.trim() ?? '',
+          data: Buffer.from(content),
+        };
+      }
+    }
+    cursor = nextBoundary;
+  }
+
+  return name && file ? { name, ...file } : undefined;
+}
 
 export interface BuildAppOptions {
   repo?: Repository;
@@ -288,6 +346,8 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
   const coordinator = opts.coordinator ?? createMemoryGatewayCoordinator();
   const storage = opts.storage ?? createMemoryObjectStorage();
   const mediaProvider = opts.mediaProvider ?? new FakeMediaProvider();
+  const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : undefined;
+  const emailFrom = process.env.EMAIL_FROM ?? 'noreply@cove.demonbox360.net';
   const app = Fastify({
     logger: {
       level: process.env.LOG_LEVEL ?? 'info',
@@ -298,6 +358,10 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
   const demoCommunityIds = new Set(demoBootstrap.communities.map((community) => community.id));
   const demoChannelIds = new Set(demoBootstrap.channels.map((channel) => channel.id));
   const hub = new GatewayHub(demoCommunityIds, coordinator, repo);
+  const screenShareSessions = new Map<string, { participantId: string; trackId: string }[]>();
+  const serverEmojiByCommunity = new Map<string, ServerEmoji[]>();
+  const serverEmojiStorageKeys = new Map<string, { storageKey: string; mimeType: string }>();
+  const mutedChannelIdsByAccount = new Map<string, Set<string>>();
 
   // Seed demo messages into repository
   for (const msg of structuredClone(demoBootstrap.messages)) {
@@ -550,6 +614,9 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
       done(null, body);
     },
   );
+  app.addContentTypeParser(/^multipart\/form-data/i, { parseAs: 'buffer' }, (_req, body, done) => {
+    done(null, body);
+  });
 
   const currentBootstrap = async (): Promise<BootstrapState> => {
     const bootstrapMessages: Message[] = [];
@@ -569,7 +636,89 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
     time: new Date().toISOString(),
   }));
 
-  app.get('/v1/bootstrap', async () => currentBootstrap());
+  app.post<{ Body: { channelId?: unknown } }>(
+    '/v1/accounts/me/muted-channels',
+    async (request, reply) => {
+      const ok = await requireAuth(request, reply);
+      if (!ok) return;
+      if (typeof request.body?.channelId !== 'string' || request.body.channelId.length === 0) {
+        return problem(
+          reply,
+          400,
+          'Invalid channel ID',
+          'channelId must be a non-empty string.',
+          request.url,
+        );
+      }
+
+      const { account } = (request as any).user as { account: Account };
+      const channelIds = mutedChannelIdsByAccount.get(account.id) ?? new Set<string>();
+      channelIds.add(request.body.channelId);
+      mutedChannelIdsByAccount.set(account.id, channelIds);
+      return reply.code(200).send({ channelIds: Array.from(channelIds) });
+    },
+  );
+
+  app.get('/v1/accounts/me/muted-channels', async (request, reply) => {
+    const ok = await requireAuth(request, reply);
+    if (!ok) return;
+    const { account } = (request as any).user as { account: Account };
+    return reply
+      .code(200)
+      .send({ channelIds: Array.from(mutedChannelIdsByAccount.get(account.id) ?? []) });
+  });
+
+  app.get('/v1/bootstrap', async (request, reply) => {
+    const authHeader = request.headers['authorization'];
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      const token = authHeader.substring(7);
+      const session = await repo.getSession(token);
+      if (session) {
+        const account = await repo.getAccountByEmail(session.email);
+        if (account) {
+          const communities = await repo.listCommunitiesForAccount(account.id);
+          const channels: Channel[] = [];
+          for (const community of communities) {
+            const communityChannels = await repo.getChannelsByCommunity(community.id);
+            channels.push(...communityChannels);
+          }
+
+          let activeCommunityId = '';
+          let activeChannelId = '';
+          let messages: Message[] = [];
+
+          if (communities.length > 0) {
+            activeCommunityId = communities[0]!.id;
+            const activeCommunityChannels = channels.filter(
+              (c) => c.communityId === activeCommunityId,
+            );
+            if (activeCommunityChannels.length > 0) {
+              activeChannelId = activeCommunityChannels[0]!.id;
+              messages = await repo.getMessagesByChannel(activeChannelId);
+            }
+          }
+
+          if (!activeCommunityId) {
+            activeCommunityId = 'no-community';
+          }
+          if (!activeChannelId) {
+            activeChannelId = 'no-channel';
+          }
+
+          return bootstrapStateSchema.parse({
+            account,
+            communities,
+            activeCommunityId,
+            activeChannelId,
+            channels,
+            messages,
+            attention: [],
+          });
+        }
+      }
+    }
+    return currentBootstrap();
+  });
 
   app.post('/v1/auth/email/send-code', async (request, reply) => {
     const parsed = emailLoginRequestSchema.safeParse(request.body);
@@ -590,8 +739,39 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
     const challengeId = crypto.randomUUID();
     const expiresAt = Date.now() + 10 * 60 * 1000;
 
+    if (resend) {
+      try {
+        const result = await resend.emails.send({
+          from: emailFrom,
+          to: email,
+          subject: `Your Cove code is ${code}`,
+          text: `Your Cove verification code is ${code}. It expires in 10 minutes.`,
+        });
+        if (result.error) {
+          app.log.error({ error: result.error, email }, 'Resend rejected verification email');
+          return problem(
+            reply,
+            502,
+            'Email delivery failed',
+            'The verification email could not be sent. Please try again.',
+            request.url,
+          );
+        }
+      } catch (error) {
+        app.log.error({ error, email }, 'Resend verification email failed');
+        return problem(
+          reply,
+          502,
+          'Email delivery failed',
+          'The verification email could not be sent. Please try again.',
+          request.url,
+        );
+      }
+    } else {
+      app.log.info(`[AUTH] Dev code ${code} for ${email} (challenge: ${challengeId})`);
+    }
+
     await repo.setEmailChallenge(email, { code, challengeId, expiresAt });
-    app.log.info(`[AUTH] Sent code ${code} to ${email} (challenge: ${challengeId})`);
 
     return reply.code(200).send({ success: true, challengeId });
   });
@@ -885,57 +1065,66 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
     },
   );
 
-  app.get<{ Params: { channelId: string } }>(
-    '/v1/channels/:channelId/messages',
-    async (request, reply) => {
-      const demoChannel = demoBootstrap.channels.find(
-        (candidate) => candidate.id === request.params.channelId,
+  app.get<{
+    Params: { channelId: string };
+    Querystring: { before?: string; limit?: string };
+  }>('/v1/channels/:channelId/messages', async (request, reply) => {
+    const demoChannel = demoBootstrap.channels.find(
+      (candidate) => candidate.id === request.params.channelId,
+    );
+    const dynamicChannel = await findDynamicChannel(request.params.channelId);
+    const channel = demoChannel ?? dynamicChannel;
+    if (!channel || channel.kind !== 'text') {
+      return problem(
+        reply,
+        404,
+        'Channel not found',
+        'The requested text channel does not exist.',
+        request.url,
       );
-      const dynamicChannel = await findDynamicChannel(request.params.channelId);
-      const channel = demoChannel ?? dynamicChannel;
-      if (!channel || channel.kind !== 'text') {
-        return problem(
-          reply,
-          404,
-          'Channel not found',
-          'The requested text channel does not exist.',
-          request.url,
-        );
-      }
+    }
 
-      let viewerAccountId: string | undefined;
-      if (dynamicChannel) {
-        const ok = await requireAuth(request, reply);
-        if (!ok) return;
-        const { account: authenticatedAccount } = (request as any).user;
-        viewerAccountId = authenticatedAccount.id;
-        const membership = await requireMembership(
-          reply,
-          dynamicChannel.communityId,
-          authenticatedAccount.id,
-          request.url,
-        );
-        if (!membership) return;
-        const permission = await requirePermission(
-          reply,
-          dynamicChannel.communityId,
-          membership,
-          authenticatedAccount.id,
-          'message.read',
-          request.url,
-        );
-        if (!permission) return;
-      }
+    let viewerAccountId: string | undefined;
+    if (dynamicChannel) {
+      const ok = await requireAuth(request, reply);
+      if (!ok) return;
+      const { account: authenticatedAccount } = (request as any).user;
+      viewerAccountId = authenticatedAccount.id;
+      const membership = await requireMembership(
+        reply,
+        dynamicChannel.communityId,
+        authenticatedAccount.id,
+        request.url,
+      );
+      if (!membership) return;
+      const permission = await requirePermission(
+        reply,
+        dynamicChannel.communityId,
+        membership,
+        authenticatedAccount.id,
+        'message.read',
+        request.url,
+      );
+      if (!permission) return;
+    }
 
-      const messages = await repo.getMessagesByChannel(channel.id);
-      return reply.code(200).send({
-        items: await Promise.all(
-          messages.map((message) => materializeMessage(message, viewerAccountId)),
-        ),
-        nextCursor: null,
-      });
-    },
-  );
+    const requestedLimit = Number(request.query.limit ?? '50');
+    const limit =
+      Number.isInteger(requestedLimit) && requestedLimit > 0 ? Math.min(requestedLimit, 200) : 50;
+    const messages = (await repo.getMessagesByChannel(channel.id)).sort((a, b) => {
+      const createdAtOrder = b.createdAt.localeCompare(a.createdAt);
+      return createdAtOrder !== 0 ? createdAtOrder : b.id.localeCompare(a.id);
+    });
+    const cursorIndex = request.query.before
+      ? messages.findIndex((message) => message.id === request.query.before)
+      : -1;
+    const pageStart = cursorIndex >= 0 ? cursorIndex + 1 : 0;
+    const page = messages.slice(pageStart, pageStart + limit);
+    return reply.code(200).send({
+      items: await Promise.all(page.map((message) => materializeMessage(message, viewerAccountId))),
+      nextCursor: page.length === limit ? page[page.length - 1]!.id : null,
+    });
+  });
 
   app.post<{ Params: { channelId: string } }>(
     '/v1/channels/:channelId/messages',
@@ -1638,6 +1827,178 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
     },
   );
 
+  app.post<{ Params: { communityId: string } }>(
+    '/v1/communities/:communityId/emoji',
+    async (request, reply) => {
+      const ok = await requireAuth(request, reply);
+      if (!ok) return;
+      const { account: actor } = (request as any).user as { account: Account };
+      const community = await repo.getCommunity(request.params.communityId);
+      if (!community) {
+        return problem(reply, 404, 'Community not found', 'Community not found.', request.url);
+      }
+      const membership = await requireMembership(reply, community.id, actor.id, request.url);
+      if (!membership) return;
+      const permission = await requirePermission(
+        reply,
+        community.id,
+        membership,
+        actor.id,
+        'community.manage',
+        request.url,
+      );
+      if (!permission) return;
+
+      const multipart = parseEmojiMultipart(
+        request.body as Buffer,
+        request.headers['content-type'],
+      );
+      if (!multipart) {
+        return problem(
+          reply,
+          400,
+          'Invalid emoji upload',
+          'Multipart fields "name" and "image" are required.',
+          request.url,
+        );
+      }
+      if (!ALLOWED_EMOJI_MIME_TYPES.has(multipart.mimeType)) {
+        return problem(
+          reply,
+          415,
+          'Unsupported media type',
+          'Emoji images must be PNG or GIF files.',
+          request.url,
+        );
+      }
+      if (multipart.data.length === 0 || multipart.data.length > MAX_EMOJI_BYTES) {
+        return problem(
+          reply,
+          413,
+          'Payload too large',
+          'Emoji images must be non-empty and no larger than 256 KB.',
+          request.url,
+        );
+      }
+
+      const emojiId = `emoji-${crypto.randomUUID()}`;
+      if (!/^[\w-]+$/.test(multipart.name) || multipart.name.length > 32) {
+        return problem(
+          reply,
+          400,
+          'Invalid emoji name',
+          'Emoji names must contain 1-32 letters, numbers, underscores, or hyphens.',
+          request.url,
+        );
+      }
+      const emoji: ServerEmoji = {
+        id: emojiId,
+        name: multipart.name,
+        url: `/v1/communities/${community.id}/emoji/${emojiId}/content`,
+        communityId: community.id,
+      };
+      const existing = serverEmojiByCommunity.get(community.id) ?? [];
+      if (existing.some((item) => item.name === emoji.name)) {
+        return problem(
+          reply,
+          409,
+          'Emoji already exists',
+          'An emoji with this name already exists in the community.',
+          request.url,
+        );
+      }
+
+      const storageKey = `${community.id}/emoji/${emojiId}`;
+      await storage.put(storageKey, multipart.data, multipart.mimeType);
+      serverEmojiStorageKeys.set(emojiId, { storageKey, mimeType: multipart.mimeType });
+      serverEmojiByCommunity.set(community.id, [...existing, emoji]);
+      return reply.code(201).send(emoji);
+    },
+  );
+
+  app.get<{ Params: { communityId: string } }>(
+    '/v1/communities/:communityId/emoji',
+    async (request, reply) => {
+      const ok = await requireAuth(request, reply);
+      if (!ok) return;
+      const { account: actor } = (request as any).user as { account: Account };
+      const community = await repo.getCommunity(request.params.communityId);
+      if (!community) {
+        return problem(reply, 404, 'Community not found', 'Community not found.', request.url);
+      }
+      const membership = await requireMembership(reply, community.id, actor.id, request.url);
+      if (!membership) return;
+      return reply.code(200).send({ emoji: serverEmojiByCommunity.get(community.id) ?? [] });
+    },
+  );
+
+  app.get<{ Params: { communityId: string; emojiId: string } }>(
+    '/v1/communities/:communityId/emoji/:emojiId/content',
+    async (request, reply) => {
+      const ok = await requireAuth(request, reply);
+      if (!ok) return;
+      const { account: actor } = (request as any).user as { account: Account };
+      const membership = await requireMembership(
+        reply,
+        request.params.communityId,
+        actor.id,
+        request.url,
+      );
+      if (!membership) return;
+      const emoji = serverEmojiByCommunity
+        .get(request.params.communityId)
+        ?.find((item) => item.id === request.params.emojiId);
+      const stored = serverEmojiStorageKeys.get(request.params.emojiId);
+      if (!emoji || !stored) {
+        return problem(reply, 404, 'Emoji not found', 'Emoji not found.', request.url);
+      }
+      const data = await storage.get(stored.storageKey);
+      if (!data) {
+        return problem(reply, 404, 'Content not found', 'Emoji content is missing.', request.url);
+      }
+      return reply.header('content-type', stored.mimeType).code(200).send(data);
+    },
+  );
+
+  app.delete<{ Params: { communityId: string; emojiId: string } }>(
+    '/v1/communities/:communityId/emoji/:emojiId',
+    async (request, reply) => {
+      const ok = await requireAuth(request, reply);
+      if (!ok) return;
+      const { account: actor } = (request as any).user as { account: Account };
+      const community = await repo.getCommunity(request.params.communityId);
+      if (!community) {
+        return problem(reply, 404, 'Community not found', 'Community not found.', request.url);
+      }
+      const membership = await requireMembership(reply, community.id, actor.id, request.url);
+      if (!membership) return;
+      const permission = await requirePermission(
+        reply,
+        community.id,
+        membership,
+        actor.id,
+        'community.manage',
+        request.url,
+      );
+      if (!permission) return;
+
+      const emoji = serverEmojiByCommunity
+        .get(community.id)
+        ?.find((item) => item.id === request.params.emojiId);
+      const stored = serverEmojiStorageKeys.get(request.params.emojiId);
+      if (!emoji || !stored) {
+        return problem(reply, 404, 'Emoji not found', 'Emoji not found.', request.url);
+      }
+      await storage.delete(stored.storageKey);
+      serverEmojiStorageKeys.delete(emoji.id);
+      serverEmojiByCommunity.set(
+        community.id,
+        (serverEmojiByCommunity.get(community.id) ?? []).filter((item) => item.id !== emoji.id),
+      );
+      return reply.code(204).send();
+    },
+  );
+
   // Communities
   app.post('/v1/communities', async (request, reply) => {
     const ok = await requireAuth(request, reply);
@@ -1688,8 +2049,31 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
     await repo.addRole(everyoneRole);
     hub.grantCommunityAccess(account.id, communityId);
 
+    // Every new community needs at least one channel so it's immediately usable.
+    const generalChannel: Channel = {
+      id: `channel-${crypto.randomUUID()}`,
+      communityId,
+      name: 'general',
+      kind: 'text',
+      category: 'Text Channels',
+      topic: '',
+      privacy: {
+        mode: 'managed',
+        searchableByServer: true,
+        appsMayReadContent: false,
+        deletedContentRecoveryDays: 7,
+        evidenceRetentionDays: 90,
+      },
+      participants: [],
+    };
+    await repo.addChannel(generalChannel);
+    await recordAudit(communityId, account.id, 'channel.created', 'channel', generalChannel.id, {
+      name: generalChannel.name,
+      kind: generalChannel.kind,
+    });
+
     app.log.info(`[COMMUNITY] Created ${communityId} by ${account.id}`);
-    return reply.code(201).send(community);
+    return reply.code(201).send({ ...community, channels: [generalChannel] });
   });
 
   app.get('/v1/communities', async (request, reply) => {
@@ -2118,7 +2502,39 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
         );
       }
 
-      const { name, kind, category, topic, privacy } = parsed.data;
+      const { name, kind, category, topic, privacy, parentChannelId, stageConfig } = parsed.data;
+
+      if (parentChannelId !== undefined) {
+        const parent = await repo.findChannelById(parentChannelId);
+        if (!parent || parent.communityId !== community.id) {
+          return problem(
+            reply,
+            404,
+            'Parent channel not found',
+            'The specified parent channel does not exist in this community.',
+            request.url,
+          );
+        }
+        if (parent.kind !== 'stage') {
+          return problem(
+            reply,
+            422,
+            'Invalid parent',
+            'Only stage channels may have subchannels.',
+            request.url,
+          );
+        }
+        if (parent.parentChannelId !== undefined) {
+          return problem(
+            reply,
+            422,
+            'Nesting not allowed',
+            'Subchannels cannot themselves have subchannels.',
+            request.url,
+          );
+        }
+      }
+
       const channelId = `channel-${crypto.randomUUID()}`;
       const channel: Channel = {
         id: channelId,
@@ -2134,6 +2550,8 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
           deletedContentRecoveryDays: 7,
           evidenceRetentionDays: 90,
         },
+        ...(parentChannelId !== undefined ? { parentChannelId } : {}),
+        ...(stageConfig !== undefined ? { stageConfig } : {}),
         participants: [],
       };
       await repo.addChannel(channel);
@@ -2168,6 +2586,188 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
 
       const list = await repo.getChannelsByCommunity(community.id);
       return reply.code(200).send({ channels: list });
+    },
+  );
+
+  // Stage subchannels
+  app.get<{ Params: { channelId: string } }>(
+    '/v1/channels/:channelId/subchannels',
+    async (request, reply) => {
+      const ok = await requireAuth(request, reply);
+      if (!ok) return;
+
+      const { account } = (request as any).user;
+      const channel = await findDynamicChannel(request.params.channelId);
+      if (!channel || channel.kind !== 'stage') {
+        return problem(
+          reply,
+          404,
+          'Stage channel not found',
+          'The requested stage channel does not exist.',
+          request.url,
+        );
+      }
+      const membership = await requireMembership(
+        reply,
+        channel.communityId,
+        account.id,
+        request.url,
+      );
+      if (!membership) return;
+
+      const communityChannels = await repo.getChannelsByCommunity(channel.communityId);
+      const subchannels = communityChannels.filter((c) => c.parentChannelId === channel.id);
+      return reply.code(200).send({ subchannels });
+    },
+  );
+
+  // Stage hover-to-eavesdrop peek — returns speakers and listeners without joining
+  app.get<{ Params: { channelId: string } }>(
+    '/v1/channels/:channelId/stage/peek',
+    async (request, reply) => {
+      const ok = await requireAuth(request, reply);
+      if (!ok) return;
+
+      const { account } = (request as any).user;
+      const channel = await findDynamicChannel(request.params.channelId);
+      if (!channel || channel.kind !== 'stage') {
+        return problem(
+          reply,
+          404,
+          'Stage channel not found',
+          'The requested stage channel does not exist.',
+          request.url,
+        );
+      }
+      const membership = await requireMembership(
+        reply,
+        channel.communityId,
+        account.id,
+        request.url,
+      );
+      if (!membership) return;
+
+      const communityChannels = await repo.getChannelsByCommunity(channel.communityId);
+      const subchannels = communityChannels.filter((c) => c.parentChannelId === channel.id);
+      const listeners: Participant[] = subchannels.flatMap((c) => c.participants);
+
+      const result: StageParticipants = stageParticipantsSchema.parse({
+        channelId: channel.id,
+        speakers: channel.participants,
+        listeners,
+        screenShares: screenShareSessions.get(channel.id) ?? [],
+      });
+      return reply.code(200).send(result);
+    },
+  );
+
+  // Screen share start/stop
+  app.post<{ Params: { channelId: string } }>(
+    '/v1/channels/:channelId/screen/start',
+    async (request, reply) => {
+      const ok = await requireAuth(request, reply);
+      if (!ok) return;
+
+      const { account: actor } = (request as any).user;
+      const channel = await findDynamicChannel(request.params.channelId);
+      if (!channel || (channel.kind !== 'voice' && channel.kind !== 'stage')) {
+        return problem(
+          reply,
+          404,
+          'Channel not found',
+          'The requested voice or stage channel does not exist.',
+          request.url,
+        );
+      }
+      const membership = await requireMembership(reply, channel.communityId, actor.id, request.url);
+      if (!membership) return;
+
+      const decision = await requirePermission(
+        reply,
+        channel.communityId,
+        membership,
+        actor.id,
+        'voice.join',
+        request.url,
+      );
+      if (!decision) return;
+
+      const inChannel = channel.participants.some((p) => p.id === actor.id);
+      if (!inChannel) {
+        return problem(
+          reply,
+          409,
+          'Not in channel',
+          'You must join the voice or stage channel before sharing your screen.',
+          request.url,
+        );
+      }
+
+      const existing = (screenShareSessions.get(channel.id) ?? []).find(
+        (s) => s.participantId === actor.id,
+      );
+      if (existing) {
+        return problem(
+          reply,
+          409,
+          'Already sharing',
+          'You are already sharing your screen in this channel.',
+          request.url,
+        );
+      }
+
+      const trackId = `track-${crypto.randomUUID()}`;
+      const sessions = screenShareSessions.get(channel.id) ?? [];
+      sessions.push({ participantId: actor.id, trackId });
+      screenShareSessions.set(channel.id, sessions);
+
+      hub.publish(
+        'screen.share.started',
+        { channelId: channel.id, participantId: actor.id, trackId },
+        channel.communityId,
+        actor.id,
+      );
+
+      return reply
+        .code(200)
+        .send({ channelId: channel.id, participantId: actor.id, trackId, active: true });
+    },
+  );
+
+  app.post<{ Params: { channelId: string } }>(
+    '/v1/channels/:channelId/screen/stop',
+    async (request, reply) => {
+      const ok = await requireAuth(request, reply);
+      if (!ok) return;
+
+      const { account: actor } = (request as any).user;
+      const channel = await findDynamicChannel(request.params.channelId);
+      if (!channel || (channel.kind !== 'voice' && channel.kind !== 'stage')) {
+        return problem(
+          reply,
+          404,
+          'Channel not found',
+          'The requested voice or stage channel does not exist.',
+          request.url,
+        );
+      }
+      const membership = await requireMembership(reply, channel.communityId, actor.id, request.url);
+      if (!membership) return;
+
+      const sessions = screenShareSessions.get(channel.id) ?? [];
+      const idx = sessions.findIndex((s) => s.participantId === actor.id);
+      if (idx !== -1) {
+        sessions.splice(idx, 1);
+        screenShareSessions.set(channel.id, sessions);
+        hub.publish(
+          'screen.share.ended',
+          { channelId: channel.id, participantId: actor.id },
+          channel.communityId,
+          actor.id,
+        );
+      }
+
+      return reply.code(200).send({ success: true });
     },
   );
 
@@ -2221,12 +2821,17 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
         }
       }
 
+      // Stage entry is listen-only until an authorized keybind press promotes the participant.
+      const participantRole: 'speaker' | 'listener' =
+        channel.kind === 'stage' || channel.parentChannelId !== undefined ? 'listener' : 'speaker';
+
       // Add user to the target voice/stage channel participants
       const participant: Participant = {
         id: actor.id,
         displayName: actor.displayName,
         initials: actor.initials,
         status: actor.status,
+        participantRole,
       };
 
       const alreadyIn = channel.participants.some((p) => p.id === actor.id);
@@ -2246,9 +2851,91 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
         channel.id,
         actor.id,
         actor.displayName,
+        { canPublish: participantRole === 'speaker' },
       );
 
-      return reply.code(200).send(mediaSession);
+      return reply.code(200).send({ ...mediaSession, participantRole });
+    },
+  );
+
+  app.post<{ Params: { channelId: string }; Body: { active?: boolean } }>(
+    '/v1/channels/:channelId/stage/speaking',
+    async (request, reply) => {
+      const ok = await requireAuth(request, reply);
+      if (!ok) return;
+
+      const { account: actor } = (request as any).user;
+      const stage = await findDynamicChannel(request.params.channelId);
+      if (!stage || stage.kind !== 'stage') {
+        return problem(
+          reply,
+          404,
+          'Stage channel not found',
+          'The requested stage channel does not exist.',
+          request.url,
+        );
+      }
+      const membership = await requireMembership(reply, stage.communityId, actor.id, request.url);
+      if (!membership) return;
+
+      const active = request.body?.active;
+      if (typeof active !== 'boolean') {
+        return problem(
+          reply,
+          400,
+          'Invalid speaking state',
+          'The active field must be a boolean.',
+          request.url,
+        );
+      }
+      if (active) {
+        const decision = await requirePermission(
+          reply,
+          stage.communityId,
+          membership,
+          actor.id,
+          'stage.speak',
+          request.url,
+        );
+        if (!decision) return;
+      }
+
+      const channels = await repo.getChannelsByCommunity(stage.communityId);
+      const joined = channels.find(
+        (channel) =>
+          (channel.id === stage.id || channel.parentChannelId === stage.id) &&
+          channel.participants.some((participant) => participant.id === actor.id),
+      );
+      if (!joined) {
+        return problem(
+          reply,
+          409,
+          'Not listening to stage',
+          'Join the stage or one of its subchannels before changing speaking state.',
+          request.url,
+        );
+      }
+
+      const participantRole = active ? 'speaker' : 'listener';
+      joined.participants = joined.participants.map((participant) =>
+        participant.id === actor.id ? { ...participant, participantRole } : participant,
+      );
+      await repo.addChannel(joined);
+      const mediaSession = await mediaProvider.setPublishPermission(
+        joined.id,
+        actor.id,
+        actor.displayName,
+        active,
+      );
+      const state = {
+        channelId: stage.id,
+        participantId: actor.id,
+        participantRole,
+        active,
+        mediaSession,
+      };
+      hub.publish('stage.speaking.updated', state, stage.communityId, actor.id);
+      return reply.code(200).send(state);
     },
   );
 
@@ -2966,7 +3653,8 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
       usedBy: account.id,
       uses: invite.uses,
     });
-    return reply.code(204).send();
+    const channels = await repo.getChannelsByCommunity(community.id);
+    return reply.code(200).send({ community, channels });
   });
 
   // Permission simulator
@@ -3050,24 +3738,86 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
     });
   });
 
+  // Community data export (E-006 portability — owner only)
+  app.get<{ Params: { communityId: string } }>(
+    '/v1/communities/:communityId/export',
+    async (request, reply) => {
+      const ok = await requireAuth(request, reply);
+      if (!ok) return;
+      const { account: actor } = (request as any).user as { account: Account };
+      const community = await repo.getCommunity(request.params.communityId);
+      if (!community) {
+        return problem(
+          reply,
+          404,
+          'Community not found',
+          'The requested community does not exist.',
+          request.url,
+        );
+      }
+      const membership = await requireMembership(reply, community.id, actor.id, request.url);
+      if (!membership) return;
+      if (membership.role !== 'owner') {
+        return problem(
+          reply,
+          403,
+          'Forbidden',
+          'Only the community owner may export community data.',
+          request.url,
+        );
+      }
+      const [channels, roles, members, invites] = await Promise.all([
+        repo.getChannelsByCommunity(community.id),
+        repo.getRolesByCommunity(community.id),
+        repo.getMemberships(community.id),
+        repo.getInvitesByCommunity(community.id),
+      ]);
+      const allMessages = (
+        await Promise.all(channels.map((ch) => repo.getMessagesByChannel(ch.id)))
+      ).flat();
+      const payload: CommunityExport = communityExportSchema.parse({
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        community,
+        channels,
+        roles,
+        memberCount: members.length,
+        messages: allMessages,
+        inviteCount: invites.length,
+      });
+      const filename = `cove-export-${community.id}-${new Date().toISOString().slice(0, 10)}.json`;
+      return reply
+        .code(200)
+        .header('content-type', 'application/json')
+        .header('content-disposition', `attachment; filename="${filename}"`)
+        .send(JSON.stringify(payload));
+    },
+  );
+
   // Operator backup/restore
-  app.post('/v1/operator/backup', async (request, reply) => {
-    const operatorKey = request.headers['x-operator-key'];
-    const expectedKey = process.env.OPERATOR_KEY || 'dev-operator-key-42';
-    if (operatorKey !== expectedKey) {
-      return problem(reply, 401, 'Unauthorized', 'Missing or invalid operator key.', request.url);
+  const operatorKey = process.env.OPERATOR_KEY;
+  if (!operatorKey) {
+    app.log.warn('OPERATOR_KEY is not set; operator backup and restore endpoints are unguarded.');
+  }
+
+  function requireOperatorAuth(request: FastifyRequest, reply: FastifyReply): boolean {
+    if (!operatorKey) return true;
+    if (request.headers.authorization !== `Bearer ${operatorKey}`) {
+      problem(reply, 401, 'Unauthorized', 'Missing or invalid operator key.', request.url);
+      return false;
     }
+    return true;
+  }
+
+  app.post('/v1/operator/backup', async (request, reply) => {
+    if (!requireOperatorAuth(request, reply)) return;
 
     const backup = await repo.exportBackup();
     return reply.code(200).header('content-type', 'application/json').send(backup);
   });
 
   app.post('/v1/operator/restore', async (request, reply) => {
-    const operatorKey = request.headers['x-operator-key'];
-    const expectedKey = process.env.OPERATOR_KEY || 'dev-operator-key-42';
-    if (operatorKey !== expectedKey) {
-      return problem(reply, 401, 'Unauthorized', 'Missing or invalid operator key.', request.url);
-    }
+    if (!requireOperatorAuth(request, reply)) return;
 
     const backupJson =
       typeof request.body === 'string' ? request.body : JSON.stringify(request.body);

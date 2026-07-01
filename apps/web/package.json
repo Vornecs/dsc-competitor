@@ -12,6 +12,7 @@
   "dependencies": {
     "@cove/contracts": "0.0.0",
     "@cove/ui": "0.0.0",
+    "livekit-client": "2.20.0",
     "lucide-react": "latest",
     "react": "latest",
     "react-dom": "latest"

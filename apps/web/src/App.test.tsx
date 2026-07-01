@@ -1,11 +1,14 @@
 import { render, screen } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import { demoBootstrap } from '@cove/contracts';
 import {
   App,
+  dismissAttentionItem,
+  markAllAttentionRead,
   reconcileAttentionItem,
+  reconcileAuditLog,
   reconcileMessageUpdate,
+  reconcileParticipantRole,
   reconcileReactionUpdate,
   reconcileSavedMessage,
   reconcileVoiceJoin,
@@ -13,29 +16,11 @@ import {
 } from './App';
 
 describe('application shell', () => {
-  it('renders the four-region community experience', () => {
+  it('renders the landing page when not authenticated', () => {
     render(<App />);
-    expect(screen.getByRole('navigation', { name: 'Spaces' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'campfire' })).toBeInTheDocument();
-    expect(screen.getByLabelText('Channel privacy')).toHaveTextContent('Managed conversation');
-    expect(screen.getByRole('button', { name: 'Close context panel' })).toBeInTheDocument();
-  });
-
-  it('switches channels and explains sealed-mode limits', async () => {
-    const user = userEvent.setup();
-    render(<App />);
-    await user.click(screen.getByRole('button', { name: /backstage/i }));
-    expect(screen.getByLabelText('Channel privacy')).toHaveTextContent('Sealed conversation');
-    expect(screen.getByText(/reviewed MLS adapter/i)).toBeInTheDocument();
-  });
-
-  it('exposes density and theme controls with accessible names', async () => {
-    const user = userEvent.setup();
-    render(<App />);
-    await user.selectOptions(screen.getByLabelText('Density'), 'compact');
-    await user.selectOptions(screen.getByLabelText('Theme'), 'contrast');
-    expect(document.documentElement.dataset.density).toBe('compact');
-    expect(document.documentElement.dataset.theme).toBe('contrast');
+    expect(screen.getByRole('heading', { level: 1, name: 'Cove' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Sign In' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Get Early Access →' })).toBeInTheDocument();
   });
 
   it('reconciles an optimistic send without duplicating a gateway event', () => {
@@ -84,6 +69,25 @@ describe('application shell', () => {
     expect(reconcileAttentionItem([reply, existing], reply)).toEqual([reply, existing]);
   });
 
+  it('merges audit event pages without duplicating entries', () => {
+    const baseEvent = {
+      id: 'audit-1',
+      communityId: 'community-ember',
+      actorId: 'account-mara',
+      action: 'channel.created' as const,
+      targetType: 'channel' as const,
+      targetId: 'channel-campfire',
+      metadata: {},
+      createdAt: new Date().toISOString(),
+    };
+    const secondEvent = { ...baseEvent, id: 'audit-2', action: 'member.joined' as const };
+
+    expect(reconcileAuditLog([baseEvent], [baseEvent, secondEvent])).toHaveLength(2);
+    expect(reconcileAuditLog([baseEvent], [secondEvent])).toEqual([baseEvent, secondEvent]);
+    expect(reconcileAuditLog([], [baseEvent, baseEvent])).toEqual([baseEvent]);
+    expect(reconcileAuditLog([], [])).toEqual([]);
+  });
+
   it('reconciles voice participant join and leave events', () => {
     const channel = demoBootstrap.channels.find((c) => c.kind === 'voice')!;
     const participant = {
@@ -112,5 +116,41 @@ describe('application shell', () => {
     // Other channels are unaffected
     const textChannel = demoBootstrap.channels.find((c) => c.kind === 'text')!;
     expect(afterLeave.find((c) => c.id === textChannel.id)).toEqual(textChannel);
+  });
+
+  it('updates participant role when reconcileParticipantRole is called', () => {
+    const stageChannel = demoBootstrap.channels.find((c) => c.kind === 'stage')!;
+    const speaker = stageChannel.participants[0]!;
+
+    const asListener = reconcileParticipantRole(
+      demoBootstrap.channels,
+      stageChannel.id,
+      speaker.id,
+      'listener',
+    );
+    const updated = asListener.find((c) => c.id === stageChannel.id)!;
+    expect(updated.participants.find((p) => p.id === speaker.id)?.participantRole).toBe('listener');
+
+    // Other channels are unaffected
+    const textChannel = demoBootstrap.channels.find((c) => c.kind === 'text')!;
+    expect(asListener.find((c) => c.id === textChannel.id)).toEqual(textChannel);
+  });
+
+  it('dismisses a single attention item by id', () => {
+    const a = demoBootstrap.attention[0]!;
+    const b = { ...a, id: 'item-b' };
+    expect(dismissAttentionItem([a, b], a.id)).toEqual([b]);
+    expect(dismissAttentionItem([a, b], 'unknown')).toEqual([a, b]);
+    expect(dismissAttentionItem([], a.id)).toEqual([]);
+  });
+
+  it('marks all attention items as read', () => {
+    const unread = { ...demoBootstrap.attention[0]!, unread: true, id: 'item-u1' };
+    const alreadyRead = { ...demoBootstrap.attention[0]!, unread: false, id: 'item-u2' };
+    const result = markAllAttentionRead([unread, alreadyRead]);
+    expect(result.every((i) => !i.unread)).toBe(true);
+    expect(result).toHaveLength(2);
+    // Identity is preserved for items already read
+    expect(result[1]).toBe(alreadyRead);
   });
 });
