@@ -322,6 +322,11 @@ export function App() {
   const [showLoginModal, setShowLoginModal] = useState(false);
   const [loginEmail, setLoginEmail] = useState('');
   const [loginCode, setLoginCode] = useState('');
+  const [showSpaceModal, setShowSpaceModal] = useState(false);
+  const [spaceModalTab, setSpaceModalTab] = useState<'create' | 'join'>('create');
+  const [newCommunityName, setNewCommunityName] = useState('');
+  const [joinInviteCode, setJoinInviteCode] = useState('');
+  const [spaceModalLoading, setSpaceModalLoading] = useState(false);
   const [loginChallengeId, setLoginChallengeId] = useState<string | null>(null);
   const [loginLoading, setLoginLoading] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
@@ -392,6 +397,60 @@ export function App() {
     if (firstTextChannel) {
       setActiveChannelId(firstTextChannel.id);
       await fetchChannelMessages(firstTextChannel.id);
+    }
+  }
+
+  async function handleCreateCommunity() {
+    if (!newCommunityName.trim() || !sessionToken) return;
+    setSpaceModalLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/v1/communities`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${sessionToken}` },
+        body: JSON.stringify({ name: newCommunityName.trim() }),
+      });
+      if (!res.ok) throw new Error(`${res.status}`);
+      const community = await res.json();
+      setBootstrap((prev) => ({ ...prev, communities: [...prev.communities, community] }));
+      setShowSpaceModal(false);
+      setNewCommunityName('');
+      void switchCommunity(community.id);
+      showToast(`"${community.name}" created!`);
+    } catch {
+      showToast('Failed to create community. Try again.');
+    } finally {
+      setSpaceModalLoading(false);
+    }
+  }
+
+  async function handleJoinByInvite() {
+    if (!joinInviteCode.trim() || !sessionToken) return;
+    setSpaceModalLoading(true);
+    try {
+      const res = await fetch(
+        `${API_BASE}/v1/invites/${encodeURIComponent(joinInviteCode.trim())}/join`,
+        {
+          method: 'POST',
+          headers: { authorization: `Bearer ${sessionToken}` },
+        },
+      );
+      if (res.status === 404) throw new Error('Invite not found or expired.');
+      if (!res.ok) throw new Error(`${res.status}`);
+      const { community } = await res.json();
+      setBootstrap((prev) => ({
+        ...prev,
+        communities: prev.communities.some((c) => c.id === community.id)
+          ? prev.communities
+          : [...prev.communities, community],
+      }));
+      setShowSpaceModal(false);
+      setJoinInviteCode('');
+      void switchCommunity(community.id);
+      showToast(`Joined "${community.name}"!`);
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Failed to join. Check the invite code.');
+    } finally {
+      setSpaceModalLoading(false);
     }
   }
 
@@ -1199,7 +1258,11 @@ export function App() {
             {community.mark}
           </button>
         ))}
-        <IconButton label="Create or join a space" className="space-add">
+        <IconButton
+          label="Create or join a space"
+          className="space-add"
+          onClick={() => { setSpaceModalTab('create'); setShowSpaceModal(true); }}
+        >
           <Plus size={20} />
         </IconButton>
         <span className="rail-spacer" />
@@ -1228,15 +1291,6 @@ export function App() {
           </IconButton>
           <ChevronDown size={17} />
         </header>
-
-        <button className="event-card" type="button">
-          <span className="event-time">20:30</span>
-          <span>
-            <strong>Practice run</strong>
-            <small>Tonight · 6 interested</small>
-          </span>
-          <span className="event-arrow">→</span>
-        </button>
 
         <div className="channel-scroll">
           {categories.map((category) => (
@@ -2010,6 +2064,97 @@ export function App() {
                   >
                     Back
                   </button>
+                </div>
+              </form>
+            )}
+          </div>
+        </div>
+      )}
+      {showSpaceModal && (
+        <div
+          className="login-modal-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Create or join a space"
+          onClick={(e) => { if (e.target === e.currentTarget) setShowSpaceModal(false); }}
+        >
+          <div className="login-modal">
+            <h2 style={{ margin: '0 0 4px', fontSize: '18px' }}>
+              {spaceModalTab === 'create' ? 'Create a space' : 'Join a space'}
+            </h2>
+            <div style={{ display: 'flex', gap: '8px', marginBottom: '20px' }}>
+              <button
+                type="button"
+                onClick={() => setSpaceModalTab('create')}
+                style={{
+                  flex: 1, padding: '7px', border: 0, borderRadius: '6px', cursor: 'pointer',
+                  background: spaceModalTab === 'create' ? 'var(--accent)' : 'var(--surface-raised)',
+                  color: spaceModalTab === 'create' ? '#fff' : 'var(--text-muted)',
+                  fontWeight: 600, fontSize: '13px',
+                }}
+              >Create</button>
+              <button
+                type="button"
+                onClick={() => setSpaceModalTab('join')}
+                style={{
+                  flex: 1, padding: '7px', border: 0, borderRadius: '6px', cursor: 'pointer',
+                  background: spaceModalTab === 'join' ? 'var(--accent)' : 'var(--surface-raised)',
+                  color: spaceModalTab === 'join' ? '#fff' : 'var(--text-muted)',
+                  fontWeight: 600, fontSize: '13px',
+                }}
+              >Join</button>
+            </div>
+            {spaceModalTab === 'create' ? (
+              <form onSubmit={(e) => { e.preventDefault(); void handleCreateCommunity(); }}>
+                <label style={{ display: 'block', marginBottom: '6px', fontSize: '12px', fontWeight: 600, color: 'var(--text-muted)' }}>
+                  SPACE NAME
+                </label>
+                <input
+                  autoFocus
+                  type="text"
+                  placeholder="My awesome space"
+                  value={newCommunityName}
+                  onChange={(e) => setNewCommunityName(e.target.value)}
+                  maxLength={80}
+                  style={{ width: '100%', boxSizing: 'border-box', padding: '10px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)', fontSize: '14px', marginBottom: '16px' }}
+                />
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button
+                    type="submit"
+                    disabled={spaceModalLoading || !newCommunityName.trim()}
+                    style={{ flex: 1, padding: '10px', border: 0, borderRadius: '6px', background: 'var(--accent)', color: '#fff', fontWeight: 600, cursor: 'pointer', opacity: spaceModalLoading || !newCommunityName.trim() ? 0.6 : 1 }}
+                  >{spaceModalLoading ? 'Creating…' : 'Create Space'}</button>
+                  <button
+                    type="button"
+                    onClick={() => setShowSpaceModal(false)}
+                    style={{ padding: '10px 16px', border: '1px solid var(--border)', borderRadius: '6px', background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer' }}
+                  >Cancel</button>
+                </div>
+              </form>
+            ) : (
+              <form onSubmit={(e) => { e.preventDefault(); void handleJoinByInvite(); }}>
+                <label style={{ display: 'block', marginBottom: '6px', fontSize: '12px', fontWeight: 600, color: 'var(--text-muted)' }}>
+                  INVITE CODE OR LINK
+                </label>
+                <input
+                  autoFocus
+                  type="text"
+                  placeholder="abc123"
+                  value={joinInviteCode}
+                  onChange={(e) => setJoinInviteCode(e.target.value)}
+                  style={{ width: '100%', boxSizing: 'border-box', padding: '10px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)', fontSize: '14px', marginBottom: '16px' }}
+                />
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button
+                    type="submit"
+                    disabled={spaceModalLoading || !joinInviteCode.trim()}
+                    style={{ flex: 1, padding: '10px', border: 0, borderRadius: '6px', background: 'var(--accent)', color: '#fff', fontWeight: 600, cursor: 'pointer', opacity: spaceModalLoading || !joinInviteCode.trim() ? 0.6 : 1 }}
+                  >{spaceModalLoading ? 'Joining…' : 'Join Space'}</button>
+                  <button
+                    type="button"
+                    onClick={() => setShowSpaceModal(false)}
+                    style={{ padding: '10px 16px', border: '1px solid var(--border)', borderRadius: '6px', background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer' }}
+                  >Cancel</button>
                 </div>
               </form>
             )}

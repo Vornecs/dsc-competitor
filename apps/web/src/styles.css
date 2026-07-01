@@ -547,7 +547,7 @@ button {
   clip: rect(0 0 0 0);
 }
 .select-control select {
-  width: 82px;
+  width: 105px;
   padding: 6px 21px 6px 7px;
   border: 1px solid var(--border);
   border-radius: 7px;
@@ -979,6 +979,77 @@ button {
   height: 28px;
   border-radius: 8px;
   background: var(--surface-active);
+  color: var(--accent);
+}
+.attention-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border-radius: 8px;
+  margin-bottom: 4px;
+}
+.attention-item.is-unread {
+  background: var(--accent-soft);
+}
+.attention-item-body {
+  flex: 1;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 9px;
+  padding: 9px 7px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  min-width: 0;
+}
+.attention-item-body:hover {
+  background: var(--surface-hover);
+}
+.attention-item-body > span:last-child {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.attention-item-body strong {
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.attention-item-body small {
+  margin-top: 2px;
+  color: var(--text-faint);
+  font-size: 9px;
+  line-height: 1.35;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.attention-item-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding-right: 4px;
+  flex-shrink: 0;
+}
+.attention-action {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+.attention-action:hover {
+  background: var(--surface-active);
+  color: var(--text);
+}
+.attention-action.is-muted {
   color: var(--accent);
 }
 .space-health > div {
