@@ -1,10 +1,10 @@
 # Cove Product Plan
 
-> Last updated: 2026-06-30 | Cycle: 29 | Phase: 2 — Voice & Stage Media | Build health: verified; expanded attention controls (mark-all-read, per-item dismiss, channel mute) delivered and tested
+> Last updated: 2026-06-30 | Cycle: 32 | Phase: 2b — Polish & Identity | Build health: verified; 75 tests passing across all workspaces; strict TypeScript clean
 >
-> Current objective: Cycle 29 added mark-all-read, per-item dismiss, and channel mute to the attention center; muted channels suppress incoming attention items in the gateway handler; mute state persists in localStorage.
+> Current objective: Build an app you and your friends actually want to use. Phase 2b pivots from platform infrastructure to product feel — landing page, UI bug fixes, custom server emoji, user profiles, rich embeds, file upload previews, and appearance customization. Deploying to cove.demonbox360.net on Oracle Cloud via Caddy. Migrating monorepo from npm to pnpm.
 >
-> Next gate: desktop keybind proof and PTT/capture/audio/soak measurements on an interactive Windows session (interactive-session-blocked).
+> Vision update (2026-06-30): friends-first before world-ready. Cove should be fun and feel like yours before it's a production platform. Polish, customization, and depth now drive the roadmap.
 
 This file is the authoritative product, architecture, and delivery record. A behavior or scope change is incomplete until this file is reconciled in the same work cycle.
 
@@ -12,7 +12,7 @@ This file is the authoritative product, architecture, and delivery record. A beh
 
 ### Promise
 
-The fastest, clearest place for friends to hang out—without ads, surveillance, unstable interfaces, or hostage data.
+The fastest, clearest place for friends to hang out — without ads, surveillance, unstable interfaces, or hostage data. Built friends-first: it should be fun and feel like *yours* before it's ready for the world.
 
 ### Launch boundary
 
@@ -85,6 +85,11 @@ Original research remains required: at least 12 members, 8 hosts/moderators, and
 | D-016 | Restrict community exports to owners and omit member identities and invite records while preserving counts and message history. | Portability requires usable history, but an export should not become a bulk identity or active-invite disclosure surface.                                                                | A reviewed portability design defines consented member fields or a safer scoped administrator role.                                     |
 | D-017 | Enter stages listen-only and change provider-side publish permission only while an authorized `stage.speak` keybind is active.  | A UI-only role flag or replacement token cannot revoke an already granted media capability; the media provider must enforce press and release transitions.                               | The selected provider proves an equivalent shorter-lived capability model with immediate release-time revocation.                       |
 | D-018 | Select the production media provider only when all LiveKit credentials are present, and issue ten-minute room-scoped grants.    | Partial configuration must fail at startup; short-lived, least-privilege grants limit credential exposure while server-side participant updates make PTT release immediate.              | Operational evidence requires a different token lifetime or the selected provider changes its permission model.                         |
+| D-019 | Friends-first product philosophy: build for you and your friends before the world.                                              | User direction 2026-06-30 — polish and fun matter more than platform compliance for now. Public-platform features (E2EE, guided report flow, federation) are deferred until the core is worth sharing. | User research shows the audience is broader and platform features are the bottleneck to activation.                             |
+| D-020 | Migrate monorepo package manager from npm to pnpm.                                                                              | Faster installs, strict dependency isolation, no phantom dependencies, correct workspace hoisting behavior.                                                                               | A measured build issue proves pnpm incompatible with a required tool.                                                                  |
+| D-021 | Deploy to cove.demonbox360.net on Oracle Cloud Ampere A1 (free tier) with Caddy as the TLS-terminating reverse proxy.          | User owns the domain and has a running Oracle server; Caddy handles automatic TLS with one config file and no cert management overhead.                                                   | Outgrows free-tier capacity or Oracle changes the free tier terms.                                                                     |
+| D-022 | Use Resend for transactional email.                                                                                             | Simplest developer experience, generous free tier, reliable deliverability, straightforward REST API.                                                                                    | Volume or feature requirements (inbound, DKIM on custom domain) require a different provider.                                          |
+| D-023 | Landing page: marketing page at /, auth routes at /login and /register.                                                         | Standard SaaS pattern; lets friends learn what Cove is before signing up; keeps auth URLs clean and linkable.                                                                            | User research shows direct-to-auth is strongly preferred.                                                                              |
 
 ## Architecture and public contracts
 
@@ -120,32 +125,60 @@ Administrator bypass never applies to ownership, billing, security, or private m
 
 ## Roadmap
 
-### Now — Phase 0, cycles 1–6
+### ✅ Done — Phase 0, cycles 1–6
+Repository, CI, design tokens, HTTP/gateway spike, LiveKit spike, Electron/Tauri capability gate, cost model, research kit.
 
-- Living plan, repository conventions, CI, linting, tests, and local runtime.
-- Product research guide, survey, and first wireframes.
-- Accessible design tokens and core shell.
-- HTTP/bootstrap and resumable gateway spike.
-- LiveKit voice/screen-share/E2EE spike.
-- Tauri/Electron Windows capability gate.
-- Managed-versus-sealed threat model and initial cost model.
-- Electron/Tauri desktop gate with dated, reproducible evidence rather than an assumption-based selection.
+### ✅ Done — Phase 1, cycles 7–25
+Email/passkey auth, communities/channels/roles/invites/permissions, PostgreSQL + Redis + attachment pipeline, messages/replies/reactions/read state, presence, audit trail, community export, deployable web client, authenticated bootstrap, voice channels.
 
-### Next — Phase 1, cycles 7–25
+### ✅ Done — Phase 2a, cycles 26–31
+- ✅ Voice, screen share, stage channels, hover-to-eavesdrop, keybind-gated stage audio
+- ✅ Expanded attention controls (mark-all-read, dismiss, channel mute)
+- ✅ Cycle 30: foundation repair (community switching, reactions, replies, reconnect, persistence, orchestration)
+- ✅ Cycle 31: attention center panel, create/join space modal, bootstrap loading state, auth test fix, toast CSS cleanup
 
-- Passkey/email authentication and device sessions.
-- Accounts, communities, memberships, roles, channels, invites, and permission simulator.
-- PostgreSQL persistence, migrations, Redis coordination, and object-storage quarantine.
-- Managed messages, replies, reactions, edits, deletes, read state, and attachment pipeline.
-- Account-targeted reply attention and community member presence.
-- Audit events, backups, restore drill, deployable web client, and operator diagnostics.
+### 🔄 In progress — Phase 2b: Friends-First Polish (cycles 32+)
 
-### Later
+**Infrastructure:**
+- 🔲 pnpm migration — replace npm across monorepo; update lockfile, CI scripts, workspace commands
+- 🔲 Deployment — Oracle Cloud Ampere A1 + Caddy config for cove.demonbox360.net; TLS auto
+- 🔲 Email — Resend integration for auth verification and notification emails
 
-- Phase 2: voice, screen share, stage channels (broadcast with listen-only subchannels, hover-to-eavesdrop, and keybind-gated stage audio), Windows packaging, expanded attention controls, and E2EE DMs.
-- Phase 3: private alpha moderation with guided report flow and unintimidating report area, exports, deletion, migration bridge, sealed channels, and billing sandbox.
-- Phase 4: external beta hardening, load, legal review, independent security/E2EE review, and gradual cohorts.
-- Phase 5: native mobile, other desktop platforms, supported self-hosting, apps, curated discovery, and knowledge channels.
+**UI bugs (from screenshot audit 2026-06-30):**
+- 🔲 "Sign In" button shown on bottom bar for already-logged-in users
+- 🔲 "Comfortab" placeholder text bleeding through in channel header
+- 🔲 Attention panel orphaned × buttons — layout needs a proper pass
+- 🔲 Settings button placement (buried under user profile area)
+- 🔲 Remove hardcoded "Practice run · Tonight · 6 interested" event card
+
+**Landing & auth:**
+- 🔲 Marketing landing page at `/` — feature highlights, screenshots, "Get Started" CTA
+- 🔲 Clean `/login` and `/register` routes with proper forms
+- 🔲 Post-login redirect back to intended destination
+
+**Identity & customization:**
+- 🔲 User avatars — avatar upload, display name, profile card on click
+- 🔲 Custom status — "🎮 in ranked", "🎵 vibing", etc. with presence display
+- 🔲 Custom server emoji — upload/manage per-community, usable in messages and reactions
+- 🔲 Themes & appearance — dark/light toggle + accent color + 2–3 curated presets
+
+**Core messaging polish:**
+- 🔲 Rich link embeds — YouTube, Twitter/X, image URLs, generic OG tags unfurl inline
+- 🔲 File & image uploads — drag-drop attach; images display inline in chat
+- 🔲 Pinned messages — moderators pin, accessible from channel header
+- 🔲 Message search — keyword search within channel
+
+**App.tsx component extraction (prerequisite for testability):**
+- 🔲 MessageList, Composer, ChannelSidebar, CommunityRail, VoicePanel, AttentionPanel — Antigravity builds; Claude wires
+
+### Later — Phase 3
+Community settings panel, DM channels, notification preferences, passkey auth UI, member list sidebar.
+
+### Later — Phase 4
+Windows packaging (Tauri/Electron gate), E2EE DMs (MLS review pending), guided report flow, sealed channels.
+
+### Later — Phase 5
+Native mobile, supported self-hosting, federation, knowledge channels, curated discovery.
 
 ### Blocked
 
@@ -190,18 +223,19 @@ Administrator bypass never applies to ownership, billing, security, or private m
 
 ## Quality dashboard
 
-| Area             | Current          | Gate                                                                                                                                                                                                                                                                                                                                                                         |
-| ---------------- | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Install          | verified         | `npm install` completed and generated a locked workspace graph.                                                                                                                                                                                                                                                                                                              |
-| Unit tests       | verified         | 132 tests pass: 19 web, 75 core, 24 contracts, 14 desktop (3 gate + 11 PTT), 0 ui.                                                                                                                                                                                                                                                                                           |
-| Type safety      | verified         | All five workspaces pass strict TypeScript.                                                                                                                                                                                                                                                                                                                                  |
-| Production build | verified         | Client output is 92.62 kB gzip JavaScript and 5.09 kB gzip CSS; multi-stage non-root container definition is present.                                                                                                                                                                                                                                                        |
-| API integration  | verified         | Health, bootstrap, authenticated mutations, audit reads, community stats, read state, replies, attention, presence, voice join/leave, signed LiveKit grants, provider-side stage publish mutation, stage subchannels, stage peek, screen-share start/stop, bans, backup/restore, gateway, device sessions, production same-origin HTML/assets, and endpoint resolution pass. |
-| Accessibility    | partial          | Semantic UI tests and accessible modes exist; real-browser review remains blocked.                                                                                                                                                                                                                                                                                           |
-| Performance      | partial          | Electron renderer loaded in 2.392 s once; a 464 MB summed startup working-set snapshot signals risk. PTT harness UI added; warm/idle p95 and soak remain unmeasured.                                                                                                                                                                                                         |
-| Security         | baseline partial | CSP, headers, runtime schemas, redacted logs, metadata-only message audit events, exact-origin default-deny CORS, threat model, and 0 production vulnerabilities. Full audit has 5 high build-time `tar` findings through `electron-rebuild`; no fix is currently available.                                                                                                 |
-| Reliability      | local only       | Backup/restore drill and production image exist; container execution and deployment SLO validation remain environment-blocked.                                                                                                                                                                                                                                               |
-| Cost             | modelled         | Initial cost model (P0-008) exists; real-world telemetry pending managed-service activation.                                                                                                                                                                                                                                                                                 |
+| Area             | Current          | Notes                                                                                                                                                                                         |
+| ---------------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Install          | in-progress      | Migrating from npm to pnpm (Cycle 32). pnpm install will replace npm install across monorepo.                                                                                                 |
+| Unit tests       | verified         | 75 core + 24 contracts + desktop + web pass. ⚠️ Web test count discrepancy — PRODUCT_PLAN previously reported 19 web tests but exploration found only 1 in App.test.tsx; under investigation. |
+| Type safety      | verified         | All five workspaces pass strict TypeScript (confirmed Cycle 30).                                                                                                                              |
+| Production build | verified         | 215 kB gzip JS (livekit-client bundled) / 5.09 kB gzip CSS; multi-stage non-root container present.                                                                                          |
+| API integration  | verified         | All Phase 1–2 endpoints covered. Cycle 30 added snapshot persistence (`SNAPSHOT_FILE`). Operator endpoints auth guard in progress (Codex Cycle 30).                                          |
+| Frontend UX      | partial          | Community switching, reactions, replies, WS reconnect, error toasts now wired. Attention panel, create/join modal, loading state still missing (P0 queue).                                   |
+| Accessibility    | partial          | Semantic UI tests exist; real-browser review blocked.                                                                                                                                         |
+| Performance      | partial          | Electron renderer 2.392 s; 464 MB working-set risk noted. PTT/soak unmeasured (session-blocked).                                                                                             |
+| Security         | partial          | CSP, headers, runtime schemas, exact-origin CORS, 0 production vulns. Operator endpoint auth guard in progress. 5 high build-time `tar` findings via electron-rebuild (no fix available).   |
+| Reliability      | partial          | WS reconnects with backoff (Cycle 30). Snapshot persistence for local dev (Cycle 30). Container execution and deployment SLO validation environment-blocked.                                 |
+| Cost             | modelled         | Initial cost model exists; real-world telemetry pending.                                                                                                                                     |
 
 ## Risk register
 
@@ -217,6 +251,33 @@ Administrator bypass never applies to ownership, billing, security, or private m
 | UI becomes unstable or decorative               | Medium      | High     | Semantic design system, visual regression, density modes, measured navigation-change policy.                                                                                                    |
 
 ## Recent session checkpoints
+
+Cycles 1–20 are summarized in the table below. Full detail for cycles 21+ follows.
+
+| Cycles | Phase | Summary |
+|--------|-------|---------|
+| 1–6 | 0 | Monorepo, CI, design tokens, gateway spike, LiveKit spike, Electron/Tauri gate, cost model, research kit |
+| 7–10 | 1 | Email/passkey auth, communities, channels, memberships, roles, invites, permission engine |
+| 11–14 | 1 | PostgreSQL, migrations, attachment pipeline, managed messages, reactions, read state |
+| 15–17 | 1 | Reply attention, presence, audit trail, community export, deployable web client |
+| 18–20 | 1 | Voice channels, LiveKit provider interface, voice participant events, join/leave UI, authenticated bootstrap |
+
+---
+
+### Cycle 30 — 2026-06-30 — completed
+
+- Objective: repair foundational gaps found in audit — nothing in the app was functionally wired despite routes and UI existing.
+- Delivered: community rail `onClick` — `switchCommunity()` updates `activeCommunityId`, fetches first text channel's messages.
+- Delivered: reaction buttons `onClick` — `toggleReaction()` calls `PUT`/`DELETE /reactions` based on current state; WebSocket events already updated UI.
+- Delivered: emoji picker — React button opens inline popup with 8 common emojis; clicking one calls `toggleReaction`.
+- Delivered: reply flow — `replyToId` state, dismissable reply bar above composer, `replyToId` sent in POST body; server already had the endpoint.
+- Delivered: channel message fetch — `useEffect` on `activeChannelId` fetches `GET /v1/channels/:id/messages` on every channel switch.
+- Delivered: WebSocket reconnection — exponential backoff (1s → 30s cap) on close; resets on READY; connection banner shown while disconnected.
+- Delivered: error toast system — `showToast()` with 4s auto-dismiss; fixed-position bottom-right; `submitMessage` now reverts optimistic message and toasts on failure instead of collapsing connection state.
+- Delivered: snapshot persistence — `SNAPSHOT_FILE` env var triggers load-on-startup, 30s autosave, and save-on-shutdown using existing `exportBackup`/`importBackup` methods.
+- Delivered: orchestration infrastructure — CLAUDE.md (Definition of Done, error handling rules, hot-file ownership), WORKLOG.md (assignments, priority queue, cycle history), daily 9 AM orchestration routine, task assignments for Codex and Antigravity.
+- Evidence: 75 core + 24 contract tests pass; strict TypeScript clean across all workspaces.
+- Blockers: desktop keybind proof, LiveKit credentials, Docker, browser QA, signing, participant research, external review — all unchanged.
 
 ### Cycle 29 — 2026-06-30 — completed
 
@@ -320,245 +381,5 @@ Administrator bypass never applies to ownership, billing, security, or private m
 - Blockers: None (existing LiveKit credentials, interactive Windows media/PTT measurements, Docker Linux daemon, browser-policy QA, code signing, participant research, and external legal/security review blockers remain).
 - Exact next task: Phase 2: voice media server (LiveKit) integration, screen share, and stage broadcast subchannels.
 
-### Cycle 21 — 2026-06-30 — completed
 
-- Objective: deliver the next portability and operator-visibility slice: community export (E-006) and a web audit log panel.
-- Delivered: versioned `communityExportSchema` and authenticated `GET /v1/communities/:communityId/export`; owners receive community/channel/role structure and complete stored message history as a dated JSON attachment, with member identities and invite records omitted in favor of counts.
-- Delivered: audit log toggle and context panel in the web client, cursor pagination, idempotent event reconciliation across replays/pages, human-readable action/target/time rows, permission/network failure states, accessible labeling, and direct community-export download.
-- Decision: D-016 makes community exports owner-only and omits member identities and invite secrets while preserving portable message history and structural data.
-- Evidence: contract tests validate the versioned bundle; core integration tests prove exported message history, attachment headers, owner enforcement, and unauthenticated denial; web tests cover panel semantics and duplicate suppression.
-- Verification: 107 tests pass (61 core + 18 contracts + 14 web + 14 desktop); all five workspaces pass strict TypeScript; production build succeeds at 89.57 kB gzip JavaScript and 4.33 kB gzip CSS; changed-scope Prettier passes; production audit reports 0 vulnerabilities.
-- Blockers: root Prettier still flags pre-existing user-local `.claude/settings.local.json`, intentionally unchanged. Full dependency audit reports 5 high build-time `tar` findings through `electron-rebuild`, with no fix available. Existing LiveKit credentials, interactive Windows media/PTT measurements, Docker Linux daemon, browser-policy QA, code signing, participant research, and external legal/security review blockers remain.
-- Exact next task: wire authenticated web session/bootstrap state so protected audit, export, community stats, messaging, and voice controls use the verified auth/session API outside preview mode; then reconcile PostgreSQL voice participant state on restart.
-
-### Cycle 20 — 2026-06-30 — completed
-
-- Objective: add voice participant gateway event handling in the web client so real-time participant lists update without a page reload, and wire the voice Join/Leave buttons to the API.
-- Delivered: `voiceParticipantJoinedSchema` (channelId + participant) and `voiceParticipantLeftSchema` (channelId + participantId) added to `@cove/contracts`; exported types `VoiceParticipantJoined` and `VoiceParticipantLeft`.
-- Delivered: `reconcileVoiceJoin(channels, channelId, participant)` and `reconcileVoiceLeave(channels, channelId, participantId)` exported from `apps/web/src/App.tsx`; both are idempotent (duplicate joins do not add duplicate entries).
-- Delivered: gateway handler in App.tsx now handles `voice.participant.joined` and `voice.participant.left` events, updating `bootstrap.channels` participant lists in state.
-- Delivered: `joinVoice(channelId)` and `leaveVoice(channelId)` functions POST to the voice join/leave API with the session token when available; `activeVoiceChannelId` and `voiceSession` state track the user's current voice session.
-- Delivered: "Leave voice" / "Join voice" toggle in the voice channel focus area; in-voice indicator in the user dock footer showing the active channel name.
-- Delivered: voice participant contract test (`voiceParticipantJoinedSchema` / `voiceParticipantLeftSchema` validation) in `packages/contracts/src/protocol.test.ts`; voice reconcile test in `apps/web/src/App.test.tsx` covering join, idempotent join, leave, and non-voice channel isolation.
-- Verification: 99 tests pass (58 core + 16 contracts + 11 web + 14 desktop); all five workspaces pass strict TypeScript; production build 88.59 kB gzip JS / 4.20 kB gzip CSS; format clean (pre-existing `.claude/settings.local.json`, `media-provider.ts`, `app.test.ts` warnings unchanged); 0 production vulnerabilities.
-- Next: community data export (E-006 portability), web client audit log panel, PostgreSQL voice participant persistence, and desktop PTT integration.
-
-### Cycle 19 — 2026-06-30 — completed
-
-- Objective: implement voice-room session contracts, MediaProvider interface, fake/LiveKit media providers, join/leave endpoints, automated room-switching, and permission gating.
-- Delivered: `voiceSessionSchema` and `VoiceSession` type added to `packages/contracts/src/protocol.ts`, and updated `createChannelRequestSchema` to support the `'stage'` kind.
-- Delivered: `MediaProvider` interface, `FakeMediaProvider` (deterministic mock connection details), and `LiveKitMediaProvider` (throws blocked error when API key/secret/url are missing, satisfying credential blocking requirements) in `services/core/src/media-provider.ts`.
-- Delivered: Permission-gated voice join/leave endpoints (`POST /v1/channels/:channelId/voice/join` and `POST /v1/channels/:channelId/voice/leave`) validating authentication, community membership, and `voice.join` permission.
-- Delivered: Support for switching voice channels in the same community (automatically removing a member from other voice/stage channels in that community upon joining a new one).
-- Delivered: Enhanced `InMemoryRepository`'s `addChannel` to support upsert/overwrite (matching PostgreSQL `ON CONFLICT` behavior) so channel participants list updates persist correctly.
-- Decision: D-015 defines `voice.join` as the gate permission for voice/stage channels, enables it by default on the `@everyone` role for new communities, and abstracts room provider generation via `MediaProvider`.
-- Verification: 97 tests pass (58 core + 15 contracts + 10 web + 14 desktop); all workspaces pass strict TypeScript typecheck; production build succeeds; Prettier/formatting checks pass.
-- Verification limitation: LiveKit provider verification remains blocked by the absence of credentials, which is simulated and verified by the throwing constructor.
-- Exact next task: implement the desktop client global push-to-talk (PTT) keybinding listener using `uiohook-napi` integration.
-
-### Cycle 18 — 2026-06-30 — completed
-
-- Objective: make the web client deployable with an explicit, production-safe HTTP and realtime configuration contract.
-- Delivered: typed browser runtime configuration supporting same-origin defaults, separate `VITE_API_URL`, and independent `VITE_GATEWAY_URL`; unsafe protocols, credentials, queries, and fragments fail during client startup/build evaluation.
-- Delivered: shared core static-client registration for preview and production, immutable fingerprinted asset caching, `WEB_DIST_DIR` startup validation, and exact-origin `CORS_ALLOWED_ORIGINS` parsing with cross-origin access disabled by default.
-- Delivered: a multi-stage `Dockerfile` that builds all workspaces and runs the integrated client/core process as a non-root user, plus `.dockerignore`, `.env.example`, production deployment documentation, and the final stale Competitor web title/description renamed to Cove.
-- Decision: D-014 makes same-origin delivery the production default and forbids wildcard CORS; separately hosted clients must declare exact browser, API, and optional gateway origins.
-- Verification: 94 tests pass (55 core + 15 contracts + 10 web + 14 desktop); all five workspaces pass strict TypeScript; production build succeeds at 88.20 kB gzip JavaScript and 4.20 kB gzip CSS; integrated preview returns the Cove HTML shell and healthy core response; Prettier passes; production and full dependency audits report 0 vulnerabilities.
-- Verification limitation: Docker Desktop's Linux daemon remains unavailable at `npipe:////./pipe/dockerDesktopLinuxEngine`, so the image could not be built or started locally. Static-serving and configuration behavior are covered by core/web tests, and the normal production build passes.
-- Exact next task: add voice-room session contracts and permission-gated join/leave endpoints behind a `MediaProvider` interface with a deterministic fake adapter; keep managed LiveKit credential validation explicitly blocked until credentials are available.
-
-### Cycle 17 — 2026-06-30 — completed
-
-- Objective: finalize database migrations, operator backup/restore drill, and community bans enforcement.
-- Delivered: `005_operator_diagnostics.sql` schema migration creating the `bans` table and updating `audit_events` action CHECK constraints to support `member.banned` and `member.unbanned`.
-- Delivered: `Repository`, `MemoryRepository`, and `PostgresRepository` interfaces extended to support `getAccountById`, community ban management (add, remove, list bans), and transaction-safe database backup export/restore.
-- Delivered: application-level ban enforcement on community join and invite usage; community-ban management endpoints (`POST /v1/communities/:communityId/bans`, `DELETE /v1/communities/:communityId/bans/:accountId`, `GET /v1/communities/:communityId/bans`); operator-level backup/restore endpoints (`POST /v1/operator/backup`, `POST /v1/operator/restore` using `X-Operator-Key` auth).
-- Delivered: integration tests for ban enforcement, join prevention, unbanning, and state restore drills in `services/core/src/app.test.ts` and unit tests in `services/core/src/migrations.test.ts`.
-- Verification: 88 tests pass (53 core + 15 contracts + 6 web + 14 desktop); all workspaces pass strict TypeScript; production build succeeds at 87.94 kB gzip JavaScript and 4.20 kB gzip CSS; Prettier clean; 0 production vulnerabilities.
-- Next: deployable web client configuration, voice room media channels, and desktop client integration.
-
-### Cycle 16 — 2026-06-30 — completed
-
-- Objective: expand operator diagnostics with a richer audit log, cursor-based pagination, a community stats endpoint, and a web client stats display.
-- Delivered: `auditEventSchema.action` enum expanded to 18 actions covering membership (`member.joined`, `member.left`, `member.role_assigned`, `member.role_removed`), channel (`channel.created`, `channel.deleted`), role (`role.created`, `role.updated`, `role.deleted`), and invite (`invite.created`, `invite.revoked`, `invite.used`) events.
-- Delivered: `targetType` changed from `z.literal('message')` to `z.enum(['message', 'member', 'channel', 'role', 'invite'])`.
-- Delivered: `communityStatsSchema` and `CommunityStats` type added to `@cove/contracts`.
-- Delivered: generic `recordAudit()` helper in `services/core/src/app.ts`; wired at 11 mutation sites (member join via direct join route + invite use route, member leave, channel create, role create/update/delete, role assign/remove, invite create/revoke/use).
-- Delivered: `getAuditEventsByCommunity` now supports cursor-based pagination with `{ limit?, cursor? }` options, returning `{ items, nextCursor }`; both memory and PostgreSQL adapters implement keyset cursors (composite `createdAt + id`).
-- Delivered: `GET /v1/communities/:id/stats` endpoint returns `{ memberCount, channelCount, messageCount, onlineCount }` gated by community membership; `getCommunityStats` added to the Repository interface, memory adapter, and PostgreSQL adapter.
-- Delivered: web client imports `communityStatsSchema`/`CommunityStats`; community header shows `X members` from bootstrap (or `X members · Y online` when session-authenticated stats are available in future).
-- Verification: 86 tests pass (51 core + 15 contracts + 6 web + 14 desktop); all five workspaces pass strict TypeScript; production build 87.90 kB gzip JavaScript / 4.20 kB gzip CSS; format clean (only pre-existing `.claude/settings.local.json` warning remains); 0 production vulnerabilities.
-- Next: backups, restore drill, deployable web client, and deeper operator diagnostics (ban log, pagination in web client audit panel).
-
-### Cycle 15 — 2026-06-30 — completed
-
-- Objective: add community member presence contracts and gateway fanout for authenticated connect/disconnect, with multi-session-safe offline transitions; then reconcile presence in web participant surfaces.
-- Delivered: `presenceUpdateSchema` and `PresenceUpdate` type on `@cove/contracts`.
-- Delivered: `GatewayHub` presence connect/disconnect session tracking and state persistence. When a user connects their first active gateway WebSocket session, their status transitions to `'online'` in the database, and a `'presence.updated'` event is fanned out to all communities they belong to. When their last active session closes, their status transitions to `'offline'` and a `'presence.updated'` event is fanned out to their communities.
-- Delivered: `App.tsx` handles the `'presence.updated'` gateway events and reconciles member status updates dynamically in the user profile, participant sidebar list, and message author indicators.
-- Verification: 80 tests pass (47 core + 13 contracts + 6 web + 14 desktop); all workspaces pass strict TypeScript; production build succeeds at 87.77 kB gzip JavaScript and 4.20 kB gzip CSS; changed-scope Prettier clean; 0 production vulnerabilities.
-- Next: add audit event log backups, restore drill, deployable web client, and operator diagnostics.
-
-### Cycle 14 — 2026-06-29 — completed
-
-- Objective: deliver attention-center notifications for replies without widening channel visibility or notifying the replying account.
-- Delivered: optional `communityId`, `channelId`, and `messageId` navigation metadata on `attentionItemSchema`; reply sends now emit `attention.item.created` with a contract-bounded preview.
-- Delivery policy: the original message author is the sole audience, self-replies are suppressed, and the existing `message.read` audience is reused so revoked or denied members receive no attention event.
-- Delivered: the web gateway handler validates reply attention and reconciles it to the front of the attention center without duplicating replayed events.
-- Decision: D-013 records account targeting, current read-permission filtering, and self-reply suppression.
-- Verification: 78 tests pass (46 core + 12 contracts + 6 web + 14 desktop); all five workspaces pass strict TypeScript; production build succeeds at 87.66 kB gzip JavaScript and 4.20 kB gzip CSS; changed-scope Prettier passes; production and full dependency audits report 0 vulnerabilities.
-- Formatting limitation: root Prettier still flags the pre-existing user-local `.claude/settings.local.json`; it was intentionally left unchanged because it is outside this cycle's scope.
-- External blockers unchanged: participant research, LiveKit credentials, interactive Windows media/PTT measurements, Tauri toolchain approval, code signing, browser-policy QA, and external legal/security review. Docker remains unavailable for live PostgreSQL migration execution.
-- Exact next task: add community member presence contracts and gateway fanout for authenticated connect/disconnect, with multi-session-safe offline transitions; then reconcile presence in web participant surfaces.
-
-### Cycle 1 — 2026-06-29 — completed
-
-- Objective: create the living plan and runnable web/API foundation.
-- Environment: empty workspace; Node.js 24.15.0 and npm 11.12.1 available; no Git repository yet.
-- Delivered: living plan, Git repository, npm workspaces, contracts and permission engine, Fastify API/WebSocket gateway, React UI shell, CI, research kit, and threat model.
-- Runtime: moved the core/default preview to port 8790 because Headroom owns 8787; integrated HTML, assets, health, and message creation responded successfully.
-- Verification: `npm test` (11 passing), `npm run typecheck`, `npm run build`, `npm run format:check`, production dependency audit, and full dependency audit all pass. The integrated preview returned HTTP 200 for both the application mount and `/v1/health`.
-- QA corrections: removed the external font request, made message actions keyboard reachable, prevented optimistic/gateway message duplication, reduced mid-width header pressure, and corrected integrated-preview path resolution.
-- Limitation: the initial sandbox-bound server attempt left the in-app browser's only tab on an internal `data:` network-error page. Browser URL policy then blocked inspection and explicitly prohibited another automation surface; P0-005 remains implemented rather than verified.
-- Repository: baseline committed as `1de8df9` after required index/ref approval became available.
-- Next: reset the in-app browser tab, complete responsive visual QA, then begin the P0-007 desktop/media shell harness.
-
-### Cycle 2 — 2026-06-29 — completed
-
-- Objective: turn P0-007 into an executable, evidence-producing Windows desktop/media gate without prematurely choosing a shell.
-- Delivered: `apps/desktop` Electron 42.5.1 control candidate, sandboxed/context-isolated preload, explicit display-source selection, Windows loopback request path, device hot-plug probe, shortcut probe, process sampler, JSON evidence view, deterministic gate evaluator, and desktop gate specification.
-- Verification: 3 desktop gate tests, strict desktop typecheck, production harness build, zero-vulnerability install audit, renderer smoke contract, and native preflight pass.
-- Measured: Windows 11 exposed 20 screen/window sources; F8 registration succeeded; renderer ready was 2.392 s in one run; immediate summed process working sets were 464 MB. These are partial signals, not p95 or soak passes.
-- Constraint discovered: Electron's built-in global shortcut API cannot deliver distinct release state, so it fails hold-to-talk without a maintained native adapter. Tauri exposes shortcut state but cannot yet be built here and has no confirmed capture/system-audio path.
-- Browser limitation: the in-app browser URL policy still blocks leaving its internal network-error data page; P0-005 remains implemented.
-- Next: run user-consented capture/audio/hot-plug and timed idle/soak measurements, spike the narrowest viable Electron PTT adapter, and advance the cost model while Tauri/LiveKit prerequisites are blocked.
-
-### Cycle 3 — 2026-06-29 — completed
-
-- Objective: spike the narrowest viable Electron PTT adapter (press/release semantics) and produce the initial cost model.
-- Delivered: `apps/desktop/src/ptt-adapter.ts` — a `PttAdapter` class accepting an injectable `PttHookBackend`, a `probePttBackend()` async probe that tries to dynamic-import `uiohook-napi` and reports availability, and three IPC handlers (`gate:probe-ptt`, `gate:register-ptt-key`, `gate:unregister-ptt-key`) wired into `main.ts`.
-- Delivered: `apps/desktop/src/ptt-adapter.test.ts` — 11 hermetic unit tests covering press/release semantics, key filtering, duplicate-press guard, unregister, timestamp shape, and the unavailable-backend path. All use an injected mock backend; no real keyboard or native module required.
-- Delivered: `docs/architecture/COST_MODEL.md` — sensitivity ranges across 10/50/200 DAU; media (LiveKit) dominates at 96 % of total cost; 6 beta telemetry requirements before any managed-service commitment; pricing deferral criteria aligned with D-006.
-- Architecture decision: PTT adapter uses constructor-level DI rather than module-state patching. The injected backend makes tests hermetic; the production path uses a dynamic import that captures ABI mismatch errors (expected until electron-rebuild runs against Electron 42 ABI).
-- Installation blocker: `npm install uiohook-napi` was denied by auto-mode (untrusted native addon). User must run: `npm install --workspace=apps/desktop uiohook-napi && npx --prefix apps/desktop electron-rebuild -f -w uiohook-napi` before the PTT IPC handlers can activate.
-- Verification: 25 tests pass (11 PTT-adapter + 3 gate + 4 web + 3 core + 4 contracts); strict TypeScript across all workspaces; production build 85.54 kB gzip; format clean.
-- Next: install uiohook-napi with electron-rebuild and run the PTT press/release IPC probe; run user-consented capture/audio/hot-plug and soak measurements; unblock P0-005 browser QA when URL policy permits.
-
-### Cycle 4 — 2026-06-29 — completed
-
-- Objective: wire the PTT adapter through the preload bridge and harness UI, install uiohook-napi with electron-rebuild, and commit the @competitor → @cove project rename.
-- Delivered: `preload.cjs` now exposes `probePtt`, `registerPttKey`, `unregisterPttKey`, and `onPttEvent` to the renderer via contextBridge.
-- Delivered: `harness/src.ts` DesktopGateApi interface extended with `PttProbeResult`, `PttEvent`, and PTT methods; UI logic added for probe, register (with key-code input), unregister, and live event display.
-- Delivered: `harness/index.html` PTT card (05) added between process sample (04) and evidence record (06), with probe button, key-code input (default 67 = F9), register/unregister buttons, and result pre. Warning updated to reference the PTT adapter.
-- Delivered: project rename from `@competitor/*` → `@cove/*` across 13 files (package.json files, imports, lockfile, docs).
-- Native addon: `npm install uiohook-napi` and `electron-rebuild -f -w uiohook-napi` both succeeded; uiohook-napi is now bound to Electron 42 ABI and `require('uiohook-napi')` resolves.
-- Verification: 25 tests pass (14 desktop + 4 web + 3 core + 4 contracts); strict TypeScript across all 5 workspaces; production build 85.54 kB gzip JS / 4.20 kB gzip CSS; formatting clean; 0 production vulnerabilities.
-- uiohook installation note: 5 high severity advisories exist in `tar` (deep dependency of `electron-rebuild` via `node-gyp`); these affect build-time only and are a known issue with old electron-rebuild.
-- Browser limitation: the in-app browser URL policy still blocks leaving its internal network-error data page; P0-005 remains implemented rather than verified.
-- Next: run the interactive harness to verify PTT press/release IPC end-to-end (probe → register key → press/release events → unregister); run user-consented capture/audio/hot-plug and soak measurements; unblock P0-005 browser QA when URL policy permits.
-
-### Cycle 6 — 2026-06-29 — completed
-
-- Objective: implement the first foundational Phase 1 social-structure slice: communities, channels, memberships, and permission simulator.
-- Delivered: `createCommunityRequestSchema`, `createChannelRequestSchema`, `permissionSimulatorRequestSchema`, and `permissionDecisionSchema` in `@cove/contracts`.
-- Delivered: in-memory stores for communities, memberships, and dynamic channels in `services/core/src/app.ts`.
-- Delivered: authenticated endpoints — POST /v1/communities, GET /v1/communities, GET /v1/communities/:id, POST /v1/communities/:id/join, DELETE /v1/communities/:id/members/:memberId (with `me` alias), POST /v1/communities/:id/channels, GET /v1/communities/:id/channels.
-- Delivered: POST /v1/permissions/simulate endpoint that wires the existing `resolvePermission` engine with zod-validated requests.
-- Behavior: community creator becomes owner; only owners/admins can create channels; owners cannot leave communities that still have other members without transferring ownership; empty communities are auto-deleted on last member leave.
-- Verification: 34 tests pass (12 core + 4 web + 14 desktop + 4 contracts); strict TypeScript across all 5 workspaces; production build 85.95 kB gzip JS / 4.20 kB gzip CSS; Prettier clean; 0 production vulnerabilities.
-- Limitation: communities, channels, roles, and invites remain in-memory; the web client bootstrap still returns demo data until the UI is wired to the new authenticated endpoints in a future cycle.
-- Next: implement permission-dependent message routing, role assignment to members, and begin PostgreSQL persistence migration.
-
-### Cycle 7 — 2026-06-29 — completed
-
-- Objective: implement roles and invites as the next slice of Phase 1 social structure.
-- Delivered: `roleSchema`, `createRoleRequestSchema`, `updateRoleRequestSchema`, `inviteSchema`, `createInviteRequestSchema` in `@cove/contracts`.
-- Delivered: in-memory stores for roles and invites in `services/core/src/app.ts`.
-- Delivered: authenticated endpoints — POST /v1/communities/:id/roles, GET /v1/communities/:id/roles, GET /v1/communities/:id/roles/:roleId, PATCH /v1/communities/:id/roles/:roleId, DELETE /v1/communities/:id/roles/:roleId, POST /v1/communities/:id/invites, GET /v1/communities/:id/invites, POST /v1/invites/:code.
-- Delivered: default @everyone role created automatically for each community with basic permissions (message.send, message.read, message.react).
-- Behavior: only community owners and admins can create/edit roles and create invites; only owners can delete roles; managed roles (@everyone) cannot be edited or deleted; invites support max uses and expiry; invite codes are 8-character base64url.
-- Verification: 43 tests pass (21 core + 4 web + 14 desktop + 4 contracts); strict TypeScript across all 5 workspaces; production build 86.12 kB gzip JS / 4.20 kB gzip CSS; Prettier clean; 0 production vulnerabilities.
-- Next: implement permission-dependent message routing, role assignment to members, and PostgreSQL persistence migration.
-- Delivered: role create/list/get/update/delete plus owner/admin-controlled member assignment/removal; deleting a role removes stale membership assignments; `@everyone` supplies the documented base policy.
-- Delivered: cryptographically random invite codes with bounded use/lifetime inputs, owner/admin-only listing, revocation, expiry/exhaustion enforcement, and sanitized gateway events that do not expose invite codes.
-- Delivered: dynamic community message reads/writes now require authentication, membership, and `message.read`/`message.send`; idempotency is scoped by author and channel; dynamic messages no longer leak into the public demo bootstrap.
-- Delivered: gateway clients are scoped to public demo communities or authenticated memberships, message events are filtered by read permission, and live access is granted/revoked when memberships change.
-- Decision: D-011 maps the managed `@everyone` role to base rules and assigned roles to role rules so the existing precedence engine remains authoritative and denials stay explainable.
-- Verification: 49 tests pass (26 core, 5 contracts, 4 web, 14 desktop); all five workspaces pass strict TypeScript; production build succeeds at 86.15 kB gzip JavaScript and 4.20 kB gzip CSS; Prettier passes; production audit reports 0 vulnerabilities.
-- Known dependency blocker: the full audit still reports 5 high-severity build-time `tar` dependency findings through `electron-rebuild`; the available forced fix is a breaking downgrade and was not applied. Runtime production dependencies remain clean.
-- External blockers unchanged: participant research, LiveKit credentials, interactive Windows media/PTT measurements, Tauri toolchain approval, code signing, browser-policy QA, and external legal/security review.
-- Exact next task: add an initial PostgreSQL schema/migration and storage interfaces for accounts, sessions, communities, memberships, channels, roles, role assignments, and invites; migrate the current routes behind repository adapters while keeping an in-memory adapter for deterministic tests.
-
-### Cycle 13 — 2026-06-29 — completed
-
-- Objective: add ordered startup migration runner and same-channel message replies.
-- Delivered: `services/core/src/migrations.ts` — `runMigrations(pool)` creates `schema_migrations` ledger, reads `schema/*.sql` files in filename order, executes each pending migration in a transaction, records it in the ledger, and rolls back with an error on failure.
-- Delivered: `services/core/schema/004_replies.sql` — `ALTER TABLE messages ADD COLUMN IF NOT EXISTS reply_to_id TEXT REFERENCES messages(id) ON DELETE SET NULL` plus index.
-- Delivered: `replyToId: string | undefined` and `replyPreview: { id, content, authorDisplayName, availability } | undefined` added to `messageSchema` and `messageReplyPreviewSchema` in `@cove/contracts`.
-- Delivered: `replyToId` optional field on `sendMessageRequestSchema`; send route validates the parent message exists and belongs to the same channel, then embeds a `replyPreview` snapshot; cross-channel and nonexistent-parent attempts return 400.
-- Delivered: `runMigrations` wired into `services/core/src/index.ts` before `buildApp()` when `DATABASE_URL` is set.
-- Delivered: `services/core/src/migrations.test.ts` — 5 unit tests: ledger-table creation, all-pending run in order, partial-apply skip, idempotent no-op, and rollback-on-failure.
-- Verification: 75 tests pass (45 core + 11 contracts + 5 web + 14 desktop); all five workspaces pass strict TypeScript; production build 87.60 kB gzip JS / 4.20 kB gzip CSS; Prettier clean; production and full dependency audits both report 0 vulnerabilities.
-- Verification limitation: Docker Desktop's Linux daemon was not running, so migration 004 was not executed against a live PostgreSQL instance. The SQL, runner logic, and FK column are wired correctly; live execution remains gated on Docker availability.
-- External blockers unchanged: participant research, LiveKit credentials, interactive Windows media/PTT measurements, Tauri toolchain approval, code signing, browser-policy QA, and external legal/security review.
-- Exact next task: attention-center reply notifications (add reply events to `attentionItemSchema` gateway fanout), then community member presence (online/idle/DnD broadcast on gateway connect/disconnect).
-
-### Cycle 12 — 2026-06-29 — completed
-
-- Objective: complete the managed-message lifecycle with edits, soft-deletes, reactions, private read state, and an accountable audit surface.
-- Delivered: runtime contracts for edits, reaction mutations/events, channel read state, and audit events; repository methods in both memory and PostgreSQL adapters; and migration `003_message_lifecycle.sql` for reactions, read states, and audit events.
-- Delivered: authenticated author-only `PATCH` edits; author or `message.manage` `DELETE` tombstones; idempotent `PUT`/`DELETE` reactions with `message.react` enforcement for adds; private `GET`/`PUT` channel read state; and permission-gated community audit reads capped at 100 events.
-- Delivered: `message.updated`, `message.deleted`, `message.reaction.updated`, and account-scoped `channel.read-state.updated` gateway events plus web reconciliation and deleted-message rendering.
-- Decision: D-012 makes read state account-private, keeps deleted content out of normal message responses, and records only channel/message/actor mutation metadata in the audit log. Removing one's own reaction remains allowed after reaction permission is revoked.
-- Verification: 69 tests pass (39 core + 11 contracts + 5 web + 14 desktop); all five workspaces pass strict TypeScript; production build succeeds at 87.55 kB gzip JavaScript and 4.20 kB gzip CSS; Prettier passes; production and full dependency audits both report 0 vulnerabilities.
-- Verification limitation: Docker Desktop's Linux daemon is not running (`npipe:////./pipe/dockerDesktopLinuxEngine` is absent), so migration 003 was not executed against a live PostgreSQL instance this cycle. The SQL is wired through the fresh-database schema mount, but existing volumes still need an ordered migration runner; both repository adapters typecheck, and memory-backed integration tests cover the route behavior.
-- External blockers unchanged: participant research, LiveKit credentials, interactive Windows media/PTT measurements, Tauri toolchain approval, code signing, browser-policy QA, and external legal/security review.
-- Exact next task: add an ordered, idempotent startup migration runner with a migration ledger for schemas 001–003 and deterministic pool-level tests; execute the live PostgreSQL integration check when Docker is available, then proceed to same-channel replies.
-
-### Cycle 11 — 2026-06-29 — completed
-
-- Objective: implement the attachment pipeline — file upload initiation, raw-body upload, quarantine tracking, serve endpoint, and message attachment resolution.
-- Delivered: `attachmentSchema` and `initiateUploadRequestSchema` in `@cove/contracts`; `attachments: []` field on `messageSchema` and optional `attachmentIds` on `sendMessageRequestSchema`; `attachments` field added to demo messages and web client optimistic message.
-- Delivered: `services/core/src/object-storage.ts` — `ObjectStorage` interface, `createMemoryObjectStorage()` (Map-backed, for tests), and `createLocalObjectStorage(dir)` (fs-backed, for single-node dev).
-- Delivered: `AttachmentRecord` type and five attachment methods added to `Repository` interface, `MemoryRepository`, and `PostgresRepository`; `services/core/schema/002_attachments.sql` migration.
-- Delivered: three new authenticated endpoints — `POST /v1/channels/:channelId/attachments/initiate` (validates MIME type and 25 MB cap, creates pending record), `PUT /v1/channels/:channelId/attachments/:attachmentId/upload` (raw binary body, auto-approves in dev), `GET /v1/attachments/:attachmentId/content` (serves approved file with correct Content-Type).
-- Delivered: message send updated to resolve `attachmentIds` into approved attachment objects and embed them in the created message.
-- Architecture: auto-approve quarantine path (`'pending' → 'approved'`) is the default. Quarantine can be enforced by a future moderation hook without changing the route contract.
-- Verification: 64 tests pass (36 core + 10 contracts + 4 web + 14 desktop); strict typecheck across all 5 workspaces; production build 86.49 kB gzip JS / 4.20 kB gzip CSS; Prettier clean; 0 production vulnerabilities. 5 new attachment tests: initiate/upload/serve roundtrip, bad MIME rejection, oversized rejection, duplicate-upload 409, and message-with-attachment resolution.
-- Next: message edits, deletes, reactions, read-state tracking, and audit event log (Phase 1 roadmap).
-
-### Cycle 10 — 2026-06-29 — completed
-
-- Objective: wire the Redis gateway coordinator for cluster-wide event sequencing and session state persistence, with graceful fallback to memory when Redis is unavailable.
-- Delivered:
-  - Updated `services/core/src/index.ts` to import and use `createRedisGatewayCoordinator()` when `REDIS_URL` is set.
-  - Added try/catch around coordinator initialization to fall back to `createMemoryGatewayCoordinator()` on Redis errors.
-  - Moved `coordinator` declaration outside the try block to allow proper access in the signal handler.
-  - Updated graceful shutdown handler to await `coordinator.disconnect()` before exit.
-  - Removed `preview.ts` coordinator wiring (kept it inline in index.ts for consistency).
-- Configuration: `docker-compose.yml` defines `redis:7-alpine` available via `REDIS_URL=redis://localhost:6379`.
-- Behavior: When `REDIS_URL` is not set or Redis fails to start, the app logs a warning and continues with an in-memory coordinator. When Redis is available, sequence numbers and resume state are stored in Redis, enabling hot standby and reconnection recovery.
-- Verification: 54 tests pass (26 core, 10 contracts, 4 web, 14 desktop); all five workspaces pass strict TypeScript; production build 86.41 kB gzip JS / 4.20 kB gzip CSS; Prettier clean; 0 production vulnerabilities.
-- Git commit: `4d44acb` — "Cycle 10: Wire Redis gateway coordinator with fallback".
-- Next: begin the attachment pipeline (file uploads, quarantine, S3-compatible storage) or add Redis unit tests with an external Redis instance.
-
-### Cycle 8 — 2026-06-30 — completed
-
-- Objective: implement repository storage abstraction layer and InMemoryRepository adapter to decouple routing from persistence.
-- Delivered: `services/core/src/repository.ts` (Repository interface and internal domain types) and `services/core/src/memory-repository.ts` (InMemoryRepository adapter).
-- Delivered: refactored routes, auth helpers, helper functions, and WebSocket gateways in `services/core/src/app.ts` to resolve data entirely via Repository.
-- Delivered: refactored `services/core/src/index.ts` and `services/core/src/preview.ts` to instantiate and inject the memory repository into `buildApp()`.
-- Verification: 49 tests pass (26 core, 5 contracts, 4 web, 14 desktop); all five workspaces pass strict TypeScript; production build succeeds at 86.15 kB gzip JS; formatting clean; 0 production vulnerabilities.
-- Next: add an initial PostgreSQL schema/migration, implement PostgreSQL repository adapter, and integrate PostgreSQL persistence.
-
-### Cycle 9 — 2026-06-29 — completed
-
-- Objective: add PostgreSQL persistence — schema, adapter, and DATABASE_URL-driven wiring — making the Repository interface fully async.
-- Delivered: `services/core/schema/001_initial.sql` — initial PostgreSQL schema with 10 tables (accounts, email_challenges, passkeys, sessions, communities, memberships, channels, roles, invites, messages, idempotency) with appropriate indexes, foreign keys, and cascade deletes.
-- Delivered: `services/core/src/postgres-repository.ts` — `createPostgresRepository(pool)` implementing the full Repository interface against PostgreSQL via `node-postgres` (pg).
-- Delivered: `docker-compose.yml` at repo root — PostgreSQL 17 Alpine with schema auto-load, health check, and persistent volume for local development.
-- Delivered: `services/core/src/index.ts` and `preview.ts` updated — when `DATABASE_URL` env is set, the app creates a pg Pool and uses the PostgreSQL adapter; otherwise falls back to the in-memory adapter.
-- Refactored: Repository interface made fully async (all methods return Promises). Memory adapter updated with async wrappers. All 30+ route handlers and helper functions in app.ts updated to await repository calls.
-- Added: `pg` and `@types/pg` dependencies to `@cove/core`.
-- Verification: 54 tests pass (26 core, 10 contracts, 4 web, 14 desktop); all five workspaces pass strict TypeScript; production build 86.41 kB gzip JS / 4.20 kB gzip CSS; Prettier clean; 0 production vulnerabilities.
-- Next: add Redis coordination for gateway session state, or begin the attachment pipeline (file uploads, quarantine, S3-compatible storage).
+> Cycles 1–21 are summarized in the table at the top of this section. Full detail is available via `git log`.
