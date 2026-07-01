@@ -273,7 +273,7 @@ function ChannelIcon({ channel }: { channel: Channel }) {
 
 export function App() {
   const [bootstrap, setBootstrap] = useState<BootstrapState>(demoBootstrap);
-  const [activeChannelId, setActiveChannelId] = useState(demoBootstrap.activeChannelId);
+  const [activeChannelId, setActiveChannelId] = useState<string | null>(demoBootstrap.activeChannelId);
   const [messages, setMessages] = useState<Message[]>(demoBootstrap.messages);
   const [draft, setDraft] = useState('');
   const [connection, setConnection] = useState<ConnectionState>('connecting');
@@ -390,18 +390,23 @@ export function App() {
   }
 
   async function switchCommunity(communityId: string) {
-    setBootstrap((prev) => ({ ...prev, activeCommunityId: communityId }));
-    const firstTextChannel = bootstrap.channels.find(
-      (ch) => ch.communityId === communityId && ch.kind === 'text',
-    );
-    if (firstTextChannel) {
-      setActiveChannelId(firstTextChannel.id);
-      await fetchChannelMessages(firstTextChannel.id);
-    }
+    setBootstrap((prev) => {
+      const firstTextChannel = prev.channels.find(
+        (ch) => ch.communityId === communityId && ch.kind === 'text',
+      );
+      if (firstTextChannel) {
+        setActiveChannelId(firstTextChannel.id);
+        void fetchChannelMessages(firstTextChannel.id);
+      } else {
+        setActiveChannelId(null);
+      }
+      return { ...prev, activeCommunityId: communityId };
+    });
   }
 
   async function handleCreateCommunity() {
-    if (!newCommunityName.trim() || !sessionToken) return;
+    if (!newCommunityName.trim()) return;
+    if (!sessionToken) { setShowSpaceModal(false); setShowLoginModal(true); return; }
     setSpaceModalLoading(true);
     try {
       const res = await fetch(`${API_BASE}/v1/communities`, {
@@ -424,7 +429,8 @@ export function App() {
   }
 
   async function handleJoinByInvite() {
-    if (!joinInviteCode.trim() || !sessionToken) return;
+    if (!joinInviteCode.trim()) return;
+    if (!sessionToken) { setShowSpaceModal(false); setShowLoginModal(true); return; }
     setSpaceModalLoading(true);
     try {
       const res = await fetch(
@@ -924,7 +930,7 @@ export function App() {
   }, [sessionToken, bootstrap.activeCommunityId]);
 
   useEffect(() => {
-    if (import.meta.env.MODE === 'test') return;
+    if (import.meta.env.MODE === 'test' || !activeChannelId) return;
     void fetchChannelMessages(activeChannelId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeChannelId]);
