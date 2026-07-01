@@ -1446,7 +1446,8 @@ describe('custom server emoji', () => {
       headers: { authorization: `Bearer ${token}` },
     });
     expect(content.statusCode).toBe(200);
-    expect(content.headers['content-type']).toMatch(/^image\//);
+    expect(content.headers['content-type']).toBe('image/png');
+    expect(content.rawPayload).toEqual(Buffer.from('png-bytes'));
   });
 });
 
