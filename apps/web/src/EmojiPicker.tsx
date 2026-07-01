@@ -1,17 +1,18 @@
-import React, { useEffect, useRef } from 'react';
+import { useEffect, useRef } from 'react';
 
-interface EmojiPickerProps {
+export interface EmojiPickerProps {
   onSelect: (emoji: string) => void;
   onClose: () => void;
 }
 
+const EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🔥', '✅', '👎'];
+
 export function EmojiPicker({ onSelect, onClose }: EmojiPickerProps) {
-  const emojis = ['👍', '❤️', '😂', '😮', '😢', '🔥', '✅', '👎'];
-  const ref = useRef<HTMLDivElement>(null);
+  const pickerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
-      if (ref.current && !ref.current.contains(event.target as Node)) {
+      if (pickerRef.current && !pickerRef.current.contains(event.target as Node)) {
         onClose();
       }
     }
@@ -24,7 +25,6 @@ export function EmojiPicker({ onSelect, onClose }: EmojiPickerProps) {
 
     document.addEventListener('mousedown', handleClickOutside);
     document.addEventListener('keydown', handleKeyDown);
-
     return () => {
       document.removeEventListener('mousedown', handleClickOutside);
       document.removeEventListener('keydown', handleKeyDown);
@@ -32,17 +32,14 @@ export function EmojiPicker({ onSelect, onClose }: EmojiPickerProps) {
   }, [onClose]);
 
   return (
-    <div
-      ref={ref}
-      className="emoji-picker"
-      role="dialog"
-      aria-label="Pick a reaction"
-    >
-      {emojis.map((emoji) => (
+    <div ref={pickerRef} className="emoji-picker" role="dialog" aria-label="Pick a reaction">
+      {EMOJIS.map((emoji) => (
         <button
           key={emoji}
           type="button"
-          onClick={() => onSelect(emoji)}
+          onClick={() => {
+            onSelect(emoji);
+          }}
         >
           {emoji}
         </button>
