@@ -20,7 +20,8 @@
     "fastify": "latest",
     "livekit-server-sdk": "2.16.0",
     "pg": "latest",
-    "redis": "6.0.1"
+    "redis": "6.0.1",
+    "resend": "6.16.0"
   },
   "devDependencies": {
     "@types/node": "latest",

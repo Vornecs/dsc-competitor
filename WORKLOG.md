@@ -232,7 +232,7 @@ When an agent writes to `status/<name>.md`:
 
 | Cycle | What shipped |
 |-------|-------------|
-| 32 | Vision update (friends-first), pnpm migration, landing page, UI bug fixes, custom emoji backend (Codex), UserAvatar component (AG) |
+| 32 | Vision pivot (friends-first, D-019–D-023), custom emoji endpoints + Resend email (Codex), ErrorBoundary + UserAvatar components (AG), operator auth test fix, emoji content test, 152 tests green |
 | 31 | Operator auth test fix, toast CSS cleanup, attention panel, create/join modal, bootstrap loading state |
 | 30 | Foundation repair: community switching, reactions, replies, WS reconnect, snapshot persistence, error toasts, orchestration setup |
 | 29 | Attention controls: mark-all-read, dismiss, channel mute |

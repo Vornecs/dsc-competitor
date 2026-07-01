@@ -327,12 +327,72 @@ export function App() {
   const [loginError, setLoginError] = useState<string | null>(null);
   const [loginSuccessMessage, setLoginSuccessMessage] = useState<string | null>(null);
 
+  const [toasts, setToasts] = useState<{ id: string; message: string }[]>([]);
+  const [replyToId, setReplyToId] = useState<string | null>(null);
+  const [replyPreviewContent, setReplyPreviewContent] = useState<string | null>(null);
+  const [emojiPickerMessageId, setEmojiPickerMessageId] = useState<string | null>(null);
+  const [wsConnectSignal, setWsConnectSignal] = useState(0);
+  const wsReconnectAttemptRef = useRef(0);
+
+  function showToast(message: string) {
+    const id = crypto.randomUUID();
+    setToasts((t) => [...t, { id, message }]);
+    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 4000);
+  }
+
   function handleSignOut() {
     localStorage.removeItem('cove_session_token');
     setSessionToken(null);
     setBootstrap(demoBootstrap);
     setMessages(demoBootstrap.messages);
     setConnection('preview');
+  }
+
+  async function fetchChannelMessages(channelId: string) {
+    const headers: Record<string, string> = {};
+    if (sessionToken) headers['authorization'] = `Bearer ${sessionToken}`;
+    try {
+      const res = await fetch(`${API_BASE}/v1/channels/${channelId}/messages`, { headers });
+      if (!res.ok) return;
+      const data = (await res.json()) as { items: Message[] };
+      if (!Array.isArray(data?.items)) return;
+      const parsed = data.items.map((m) => messageSchema.safeParse(m)).filter((r) => r.success).map((r) => r.data!);
+      setMessages((current) => {
+        const others = current.filter((m) => m.channelId !== channelId);
+        return [...others, ...parsed];
+      });
+    } catch {
+      // Network error — silently skip, existing messages stay
+    }
+  }
+
+  async function toggleReaction(messageId: string, channelId: string, emoji: string, reacted: boolean) {
+    if (!sessionToken) {
+      showToast('Sign in to react to messages');
+      return;
+    }
+    const method = reacted ? 'DELETE' : 'PUT';
+    try {
+      const res = await fetch(`${API_BASE}/v1/channels/${channelId}/messages/${messageId}/reactions`, {
+        method,
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${sessionToken}` },
+        body: JSON.stringify({ emoji }),
+      });
+      if (!res.ok) throw new Error('Reaction rejected');
+    } catch {
+      showToast('Failed to update reaction');
+    }
+  }
+
+  async function switchCommunity(communityId: string) {
+    setBootstrap((prev) => ({ ...prev, activeCommunityId: communityId }));
+    const firstTextChannel = bootstrap.channels.find(
+      (ch) => ch.communityId === communityId && ch.kind === 'text',
+    );
+    if (firstTextChannel) {
+      setActiveChannelId(firstTextChannel.id);
+      await fetchChannelMessages(firstTextChannel.id);
+    }
   }
 
   function toggleChannelMute(channelId: string) {
@@ -553,6 +613,7 @@ export function App() {
       if (!parsed.success) return;
       const frame = parsed.data;
       if (frame.op === 'READY') {
+        wsReconnectAttemptRef.current = 0;
         setConnection('live');
         heartbeat = window.setInterval(() => {
           socket.send(JSON.stringify({ op: 'HEARTBEAT', data: { sequence: frame.data.sequence } }));
@@ -690,13 +751,22 @@ export function App() {
         }
       }
     });
-    socket.addEventListener('close', () => setConnection('preview'));
-    socket.addEventListener('error', () => setConnection('preview'));
+    socket.addEventListener('close', () => {
+      setConnection('preview');
+      const attempt = wsReconnectAttemptRef.current;
+      wsReconnectAttemptRef.current = attempt + 1;
+      const delay = Math.min(1000 * Math.pow(2, attempt), 30_000);
+      setTimeout(() => setWsConnectSignal((s) => s + 1), delay);
+    });
+    socket.addEventListener('error', () => {
+      // 'close' fires after 'error', reconnect is handled there
+      setConnection('preview');
+    });
     return () => {
       if (heartbeat) window.clearInterval(heartbeat);
       socket.close();
     };
-  }, [sessionToken, bootstrap.account.id]);
+  }, [sessionToken, bootstrap.account.id, wsConnectSignal]);
 
   // Web PTT Keybind Listener
   useEffect(() => {
@@ -795,6 +865,12 @@ export function App() {
   }, [sessionToken, bootstrap.activeCommunityId]);
 
   useEffect(() => {
+    if (import.meta.env.MODE === 'test') return;
+    void fetchChannelMessages(activeChannelId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeChannelId]);
+
+  useEffect(() => {
     if (typeof endRef.current?.scrollIntoView === 'function') {
       endRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
@@ -807,6 +883,9 @@ export function App() {
       return;
     setDraft('');
     const clientNonce = crypto.randomUUID();
+    const currentReplyToId = replyToId;
+    setReplyToId(null);
+    setReplyPreviewContent(null);
     const optimistic: Message = {
       id: `optimistic-${clientNonce}`,
       channelId: activeChannel.id,
@@ -817,6 +896,7 @@ export function App() {
       editedAt: null,
       reactions: [],
       attachments: [],
+      replyToId: currentReplyToId ?? undefined,
     };
     setMessages((current) => [...current, optimistic]);
 
@@ -828,16 +908,19 @@ export function App() {
       if (sessionToken) {
         headers['authorization'] = `Bearer ${sessionToken}`;
       }
+      const body: Record<string, unknown> = { content, clientNonce };
+      if (currentReplyToId) body['replyToId'] = currentReplyToId;
       const response = await fetch(`${API_BASE}/v1/channels/${activeChannel.id}/messages`, {
         method: 'POST',
         headers,
-        body: JSON.stringify({ content, clientNonce }),
+        body: JSON.stringify(body),
       });
       if (!response.ok) throw new Error('Message rejected');
       const saved = messageSchema.parse(await response.json());
       setMessages((current) => reconcileSavedMessage(current, optimistic.id, saved));
     } catch {
-      setConnection('preview');
+      setMessages((current) => current.filter((m) => m.id !== optimistic.id));
+      showToast('Failed to send message — please try again');
     }
   }
 
@@ -1110,6 +1193,8 @@ export function App() {
             style={{ '--space-accent': community.accent } as React.CSSProperties}
             aria-label={community.name}
             title={community.name}
+            type="button"
+            onClick={() => void switchCommunity(community.id)}
           >
             {community.mark}
           </button>
@@ -1540,18 +1625,57 @@ export function App() {
                               className={reaction.reacted ? 'is-reacted' : ''}
                               key={reaction.emoji}
                               type="button"
+                              onClick={() =>
+                                void toggleReaction(
+                                  message.id,
+                                  message.channelId,
+                                  reaction.emoji,
+                                  reaction.reacted,
+                                )
+                              }
                             >
                               {reaction.emoji} <span>{reaction.count}</span>
                             </button>
                           ))}
                         </div>
                       )}
+                      {emojiPickerMessageId === message.id && (
+                        <div className="emoji-picker" role="dialog" aria-label="Pick a reaction">
+                          {['👍', '❤️', '😂', '😮', '😢', '🔥', '✅', '👎'].map((emoji) => (
+                            <button
+                              key={emoji}
+                              type="button"
+                              onClick={() => {
+                                setEmojiPickerMessageId(null);
+                                void toggleReaction(message.id, message.channelId, emoji, false);
+                              }}
+                            >
+                              {emoji}
+                            </button>
+                          ))}
+                        </div>
+                      )}
                     </div>
                     <div className="message-actions" aria-label="Message actions">
-                      <IconButton label="React">
+                      <IconButton
+                        label="React"
+                        onClick={() =>
+                          setEmojiPickerMessageId((id) => (id === message.id ? null : message.id))
+                        }
+                      >
                         <Smile size={15} />
                       </IconButton>
-                      <IconButton label="Reply">
+                      <IconButton
+                        label="Reply"
+                        onClick={() => {
+                          setReplyToId(message.id);
+                          setReplyPreviewContent(
+                            message.content.length > 80
+                              ? message.content.slice(0, 80) + '…'
+                              : message.content,
+                          );
+                        }}
+                      >
                         <MessageSquareText size={15} />
                       </IconButton>
                       <IconButton label="More actions">
@@ -1568,6 +1692,21 @@ export function App() {
 
         {activeChannel.kind === 'text' && (
           <form className="composer" onSubmit={submitMessage}>
+            {replyToId && (
+              <div className="reply-bar">
+                <span>Replying to: {replyPreviewContent}</span>
+                <button
+                  type="button"
+                  aria-label="Cancel reply"
+                  onClick={() => {
+                    setReplyToId(null);
+                    setReplyPreviewContent(null);
+                  }}
+                >
+                  ×
+                </button>
+              </div>
+            )}
             {activeChannel.privacy.mode === 'sealed' ? (
               <div className="sealed-placeholder">
                 <LockKeyhole size={17} /> Sealed messaging enters after the reviewed MLS adapter.
@@ -1954,6 +2093,56 @@ export function App() {
               )}
             </div>
           </div>
+        </div>
+      )}
+      {toasts.length > 0 && (
+        <div
+          style={{
+            position: 'fixed',
+            bottom: 16,
+            right: 16,
+            zIndex: 9999,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 8,
+            pointerEvents: 'none',
+          }}
+        >
+          {toasts.map((toast) => (
+            <div
+              key={toast.id}
+              style={{
+                background: 'var(--danger, #e3342f)',
+                color: '#fff',
+                padding: '8px 14px',
+                borderRadius: 6,
+                fontSize: 13,
+                boxShadow: '0 2px 8px rgba(0,0,0,.35)',
+              }}
+            >
+              {toast.message}
+            </div>
+          ))}
+        </div>
+      )}
+      {connection !== 'live' && sessionToken && (
+        <div
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            background: connection === 'connecting' ? 'var(--accent, #5865f2)' : '#e3342f',
+            color: '#fff',
+            textAlign: 'center',
+            fontSize: 12,
+            padding: '4px 0',
+            zIndex: 9998,
+          }}
+        >
+          {connection === 'connecting'
+            ? 'Connecting…'
+            : 'Disconnected — reconnecting automatically'}
         </div>
       )}
     </main>

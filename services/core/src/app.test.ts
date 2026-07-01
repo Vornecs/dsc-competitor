@@ -1184,6 +1184,105 @@ describe('invite API', () => {
   });
 });
 
+describe('custom server emoji', () => {
+  async function setup() {
+    const app = await buildApp();
+    apps.push(app);
+    const email = `emoji-${crypto.randomUUID()}@test.cove.chat`;
+    const challenge = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/email/send-code',
+      payload: { email },
+    });
+    const verified = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/email/verify',
+      payload: { email, code: '123456', challengeId: challenge.json().challengeId },
+    });
+    const token = verified.json().sessionToken as string;
+    const community = await app.inject({
+      method: 'POST',
+      url: '/v1/communities',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 'Emoji Cove' },
+    });
+    return { app, token, communityId: community.json().id as string };
+  }
+
+  function multipartEmoji(name: string) {
+    const boundary = `cove-${crypto.randomUUID()}`;
+    const body = Buffer.from(
+      `--${boundary}\r\nContent-Disposition: form-data; name="name"\r\n\r\n${name}\r\n` +
+        `--${boundary}\r\nContent-Disposition: form-data; name="image"; filename="${name}.png"\r\n` +
+        `Content-Type: image/png\r\n\r\npng-bytes\r\n--${boundary}--\r\n`,
+    );
+    return { body, contentType: `multipart/form-data; boundary=${boundary}` };
+  }
+
+  async function upload(app: Awaited<ReturnType<typeof buildApp>>, token: string, communityId: string) {
+    const multipart = multipartEmoji('party_blob');
+    return app.inject({
+      method: 'POST',
+      url: `/v1/communities/${communityId}/emoji`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        'content-type': multipart.contentType,
+      },
+      body: multipart.body,
+    });
+  }
+
+  it('uploads a PNG and creates a server emoji', async () => {
+    const { app, token, communityId } = await setup();
+    const response = await upload(app, token, communityId);
+    expect(response.statusCode).toBe(201);
+    expect(response.json()).toMatchObject({ name: 'party_blob', communityId });
+    expect(response.json().url).toContain(`/v1/communities/${communityId}/emoji/`);
+  });
+
+  it('lists uploaded server emoji', async () => {
+    const { app, token, communityId } = await setup();
+    const created = await upload(app, token, communityId);
+    const response = await app.inject({
+      method: 'GET',
+      url: `/v1/communities/${communityId}/emoji`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().emoji).toEqual([created.json()]);
+  });
+
+  it('deletes a server emoji', async () => {
+    const { app, token, communityId } = await setup();
+    const created = await upload(app, token, communityId);
+    const response = await app.inject({
+      method: 'DELETE',
+      url: `/v1/communities/${communityId}/emoji/${created.json().id}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(response.statusCode).toBe(204);
+    const listed = await app.inject({
+      method: 'GET',
+      url: `/v1/communities/${communityId}/emoji`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(listed.json()).toEqual({ emoji: [] });
+  });
+
+  it('serves emoji binary content at the url returned on upload', async () => {
+    const { app, token, communityId } = await setup();
+    const created = await upload(app, token, communityId);
+    const contentUrl = created.json().url as string;
+    const content = await app.inject({
+      method: 'GET',
+      url: contentUrl,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(content.statusCode).toBe(200);
+    expect(content.headers['content-type']).toMatch(/^image\//);
+  });
+});
+
 describe('attachment pipeline', () => {
   async function getAuth(app: Awaited<ReturnType<typeof buildApp>>) {
     const email = `user-${crypto.randomUUID()}@test.cove.chat`;
@@ -2280,7 +2379,7 @@ describe('operator audit log', () => {
     const backupRes1 = await app.inject({
       method: 'POST',
       url: '/v1/operator/backup',
-      headers: { 'x-operator-key': 'test-operator-key' },
+      headers: { authorization: 'Bearer test-operator-key' },
     });
     expect(backupRes1.statusCode).toBe(200);
     const backupData1 = backupRes1.body;
@@ -2312,7 +2411,7 @@ describe('operator audit log', () => {
     const backupRes2 = await app.inject({
       method: 'POST',
       url: '/v1/operator/backup',
-      headers: { 'x-operator-key': 'test-operator-key' },
+      headers: { authorization: 'Bearer test-operator-key' },
     });
     expect(backupRes2.statusCode).toBe(200);
     const backupData2 = backupRes2.body;
@@ -2321,7 +2420,7 @@ describe('operator audit log', () => {
     const restoreRes1 = await app.inject({
       method: 'POST',
       url: '/v1/operator/restore',
-      headers: { 'x-operator-key': 'test-operator-key', 'content-type': 'application/json' },
+      headers: { authorization: 'Bearer test-operator-key', 'content-type': 'application/json' },
       payload: backupData1,
     });
     expect(restoreRes1.statusCode).toBe(204);
@@ -2338,7 +2437,7 @@ describe('operator audit log', () => {
     const restoreRes2 = await app.inject({
       method: 'POST',
       url: '/v1/operator/restore',
-      headers: { 'x-operator-key': 'test-operator-key', 'content-type': 'application/json' },
+      headers: { authorization: 'Bearer test-operator-key', 'content-type': 'application/json' },
       payload: backupData2,
     });
     expect(restoreRes2.statusCode).toBe(204);
@@ -2353,23 +2452,34 @@ describe('operator audit log', () => {
   });
 
   it('rejects operator backup and restore without the configured operator key', async () => {
-    const app = await buildApp();
-    apps.push(app);
+    // Phase 1: no OPERATOR_KEY — endpoints are unguarded
+    const unguardedApp = await buildApp();
+    apps.push(unguardedApp);
 
-    for (const url of ['/v1/operator/backup', '/v1/operator/restore']) {
-      const missingConfiguration = await app.inject({ method: 'POST', url });
-      expect(missingConfiguration.statusCode).toBe(401);
-    }
+    const unguardedBackup = await unguardedApp.inject({ method: 'POST', url: '/v1/operator/backup' });
+    expect(unguardedBackup.statusCode).toBe(200);
 
+    const unguardedRestore = await unguardedApp.inject({
+      method: 'POST',
+      url: '/v1/operator/restore',
+      headers: { 'content-type': 'application/json' },
+      payload: unguardedBackup.body,
+    });
+    expect(unguardedRestore.statusCode).toBe(204);
+
+    // Phase 2: OPERATOR_KEY set — build a NEW app so the key is captured at startup
     vi.stubEnv('OPERATOR_KEY', 'test-operator-key');
+    const guardedApp = await buildApp();
+    apps.push(guardedApp);
+
     for (const url of ['/v1/operator/backup', '/v1/operator/restore']) {
-      const missingHeader = await app.inject({ method: 'POST', url });
+      const missingHeader = await guardedApp.inject({ method: 'POST', url });
       expect(missingHeader.statusCode).toBe(401);
 
-      const invalidHeader = await app.inject({
+      const invalidHeader = await guardedApp.inject({
         method: 'POST',
         url,
-        headers: { 'x-operator-key': 'wrong-key' },
+        headers: { authorization: 'Bearer wrong-key' },
       });
       expect(invalidHeader.statusCode).toBe(401);
     }

@@ -57,13 +57,14 @@ import {
 } from '@cove/contracts';
 import type { ObjectStorage } from './object-storage.js';
 import { createMemoryObjectStorage } from './object-storage.js';
-import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify';
+import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import type { WebSocket } from 'ws';
 import type { Membership, Repository } from './repository.js';
 import { createMemoryRepository } from './memory-repository.js';
 import type { GatewayCoordinator } from './gateway-coordinator.js';
 import { createMemoryGatewayCoordinator } from './memory-gateway-coordinator.js';
 import { type MediaProvider, FakeMediaProvider } from './media-provider.js';
+import { Resend } from 'resend';
 
 const account = demoBootstrap.account;
 
@@ -278,6 +279,53 @@ const ALLOWED_MIME_TYPES = new Set([
   'text/plain',
 ]);
 const MAX_ATTACHMENT_BYTES = 26_214_400; // 25 MB
+const MAX_EMOJI_BYTES = 256 * 1024;
+const ALLOWED_EMOJI_MIME_TYPES = new Set(['image/png', 'image/gif']);
+type ServerEmoji = {
+  id: string;
+  name: string;
+  url: string;
+  communityId: string;
+};
+
+function parseEmojiMultipart(
+  body: Buffer,
+  contentType: string | undefined,
+): { name: string; filename: string; mimeType: string; data: Buffer } | undefined {
+  const boundary = contentType?.match(/boundary=(?:"([^"]+)"|([^;]+))/i)?.slice(1).find(Boolean);
+  if (!boundary) return undefined;
+
+  const marker = Buffer.from(`--${boundary}`);
+  const headerSeparator = Buffer.from('\r\n\r\n');
+  let name: string | undefined;
+  let file: { filename: string; mimeType: string; data: Buffer } | undefined;
+
+  let cursor = body.indexOf(marker);
+  while (cursor >= 0) {
+    const partStart = cursor + marker.length;
+    const nextBoundary = body.indexOf(marker, partStart);
+    if (nextBoundary < 0) break;
+    const part = body.subarray(partStart, nextBoundary);
+    const headersEnd = part.indexOf(headerSeparator);
+    if (headersEnd >= 0) {
+      const headers = part.subarray(0, headersEnd).toString('utf8');
+      const content = part.subarray(headersEnd + headerSeparator.length, part.length - 2);
+      const fieldName = headers.match(/name="([^"]+)"/i)?.[1];
+      const filename = headers.match(/filename="([^"]+)"/i)?.[1];
+      if (fieldName === 'name' && !filename) name = content.toString('utf8');
+      if (fieldName === 'image' && filename) {
+        file = {
+          filename,
+          mimeType: headers.match(/content-type:\s*([^\r\n]+)/i)?.[1]?.trim() ?? '',
+          data: Buffer.from(content),
+        };
+      }
+    }
+    cursor = nextBoundary;
+  }
+
+  return name && file ? { name, ...file } : undefined;
+}
 
 export interface BuildAppOptions {
   repo?: Repository;
@@ -292,6 +340,8 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
   const coordinator = opts.coordinator ?? createMemoryGatewayCoordinator();
   const storage = opts.storage ?? createMemoryObjectStorage();
   const mediaProvider = opts.mediaProvider ?? new FakeMediaProvider();
+  const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : undefined;
+  const emailFrom = process.env.EMAIL_FROM ?? 'noreply@cove.demonbox360.net';
   const app = Fastify({
     logger: {
       level: process.env.LOG_LEVEL ?? 'info',
@@ -303,6 +353,8 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
   const demoChannelIds = new Set(demoBootstrap.channels.map((channel) => channel.id));
   const hub = new GatewayHub(demoCommunityIds, coordinator, repo);
   const screenShareSessions = new Map<string, { participantId: string; trackId: string }[]>();
+  const serverEmojiByCommunity = new Map<string, ServerEmoji[]>();
+  const serverEmojiStorageKeys = new Map<string, { storageKey: string; mimeType: string }>();
 
   // Seed demo messages into repository
   for (const msg of structuredClone(demoBootstrap.messages)) {
@@ -555,6 +607,9 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
       done(null, body);
     },
   );
+  app.addContentTypeParser(/^multipart\/form-data/i, { parseAs: 'buffer' }, (_req, body, done) => {
+    done(null, body);
+  });
 
   const currentBootstrap = async (): Promise<BootstrapState> => {
     const bootstrapMessages: Message[] = [];
@@ -652,8 +707,39 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
     const challengeId = crypto.randomUUID();
     const expiresAt = Date.now() + 10 * 60 * 1000;
 
+    if (resend) {
+      try {
+        const result = await resend.emails.send({
+          from: emailFrom,
+          to: email,
+          subject: `Your Cove code is ${code}`,
+          text: `Your Cove verification code is ${code}. It expires in 10 minutes.`,
+        });
+        if (result.error) {
+          app.log.error({ error: result.error, email }, 'Resend rejected verification email');
+          return problem(
+            reply,
+            502,
+            'Email delivery failed',
+            'The verification email could not be sent. Please try again.',
+            request.url,
+          );
+        }
+      } catch (error) {
+        app.log.error({ error, email }, 'Resend verification email failed');
+        return problem(
+          reply,
+          502,
+          'Email delivery failed',
+          'The verification email could not be sent. Please try again.',
+          request.url,
+        );
+      }
+    } else {
+      app.log.info(`[AUTH] Dev code ${code} for ${email} (challenge: ${challengeId})`);
+    }
+
     await repo.setEmailChallenge(email, { code, challengeId, expiresAt });
-    app.log.info(`[AUTH] Sent code ${code} to ${email} (challenge: ${challengeId})`);
 
     return reply.code(200).send({ success: true, challengeId });
   });
@@ -1697,6 +1783,178 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
         .header('content-disposition', `inline; filename="${attachment.filename}"`)
         .code(200)
         .send(data);
+    },
+  );
+
+  app.post<{ Params: { communityId: string } }>(
+    '/v1/communities/:communityId/emoji',
+    async (request, reply) => {
+      const ok = await requireAuth(request, reply);
+      if (!ok) return;
+      const { account: actor } = (request as any).user as { account: Account };
+      const community = await repo.getCommunity(request.params.communityId);
+      if (!community) {
+        return problem(reply, 404, 'Community not found', 'Community not found.', request.url);
+      }
+      const membership = await requireMembership(reply, community.id, actor.id, request.url);
+      if (!membership) return;
+      const permission = await requirePermission(
+        reply,
+        community.id,
+        membership,
+        actor.id,
+        'community.manage',
+        request.url,
+      );
+      if (!permission) return;
+
+      const multipart = parseEmojiMultipart(
+        request.body as Buffer,
+        request.headers['content-type'],
+      );
+      if (!multipart) {
+        return problem(
+          reply,
+          400,
+          'Invalid emoji upload',
+          'Multipart fields "name" and "image" are required.',
+          request.url,
+        );
+      }
+      if (!ALLOWED_EMOJI_MIME_TYPES.has(multipart.mimeType)) {
+        return problem(
+          reply,
+          415,
+          'Unsupported media type',
+          'Emoji images must be PNG or GIF files.',
+          request.url,
+        );
+      }
+      if (multipart.data.length === 0 || multipart.data.length > MAX_EMOJI_BYTES) {
+        return problem(
+          reply,
+          413,
+          'Payload too large',
+          'Emoji images must be non-empty and no larger than 256 KB.',
+          request.url,
+        );
+      }
+
+      const emojiId = `emoji-${crypto.randomUUID()}`;
+      if (!/^[\w-]+$/.test(multipart.name) || multipart.name.length > 32) {
+        return problem(
+          reply,
+          400,
+          'Invalid emoji name',
+          'Emoji names must contain 1-32 letters, numbers, underscores, or hyphens.',
+          request.url,
+        );
+      }
+      const emoji: ServerEmoji = {
+        id: emojiId,
+        name: multipart.name,
+        url: `/v1/communities/${community.id}/emoji/${emojiId}/content`,
+        communityId: community.id,
+      };
+      const existing = serverEmojiByCommunity.get(community.id) ?? [];
+      if (existing.some((item) => item.name === emoji.name)) {
+        return problem(
+          reply,
+          409,
+          'Emoji already exists',
+          'An emoji with this name already exists in the community.',
+          request.url,
+        );
+      }
+
+      const storageKey = `${community.id}/emoji/${emojiId}`;
+      await storage.put(storageKey, multipart.data, multipart.mimeType);
+      serverEmojiStorageKeys.set(emojiId, { storageKey, mimeType: multipart.mimeType });
+      serverEmojiByCommunity.set(community.id, [...existing, emoji]);
+      return reply.code(201).send(emoji);
+    },
+  );
+
+  app.get<{ Params: { communityId: string } }>(
+    '/v1/communities/:communityId/emoji',
+    async (request, reply) => {
+      const ok = await requireAuth(request, reply);
+      if (!ok) return;
+      const { account: actor } = (request as any).user as { account: Account };
+      const community = await repo.getCommunity(request.params.communityId);
+      if (!community) {
+        return problem(reply, 404, 'Community not found', 'Community not found.', request.url);
+      }
+      const membership = await requireMembership(reply, community.id, actor.id, request.url);
+      if (!membership) return;
+      return reply.code(200).send({ emoji: serverEmojiByCommunity.get(community.id) ?? [] });
+    },
+  );
+
+  app.get<{ Params: { communityId: string; emojiId: string } }>(
+    '/v1/communities/:communityId/emoji/:emojiId/content',
+    async (request, reply) => {
+      const ok = await requireAuth(request, reply);
+      if (!ok) return;
+      const { account: actor } = (request as any).user as { account: Account };
+      const membership = await requireMembership(
+        reply,
+        request.params.communityId,
+        actor.id,
+        request.url,
+      );
+      if (!membership) return;
+      const emoji = serverEmojiByCommunity
+        .get(request.params.communityId)
+        ?.find((item) => item.id === request.params.emojiId);
+      const stored = serverEmojiStorageKeys.get(request.params.emojiId);
+      if (!emoji || !stored) {
+        return problem(reply, 404, 'Emoji not found', 'Emoji not found.', request.url);
+      }
+      const data = await storage.get(stored.storageKey);
+      if (!data) {
+        return problem(reply, 404, 'Content not found', 'Emoji content is missing.', request.url);
+      }
+      return reply.header('content-type', stored.mimeType).code(200).send(data);
+    },
+  );
+
+  app.delete<{ Params: { communityId: string; emojiId: string } }>(
+    '/v1/communities/:communityId/emoji/:emojiId',
+    async (request, reply) => {
+      const ok = await requireAuth(request, reply);
+      if (!ok) return;
+      const { account: actor } = (request as any).user as { account: Account };
+      const community = await repo.getCommunity(request.params.communityId);
+      if (!community) {
+        return problem(reply, 404, 'Community not found', 'Community not found.', request.url);
+      }
+      const membership = await requireMembership(reply, community.id, actor.id, request.url);
+      if (!membership) return;
+      const permission = await requirePermission(
+        reply,
+        community.id,
+        membership,
+        actor.id,
+        'community.manage',
+        request.url,
+      );
+      if (!permission) return;
+
+      const emoji = serverEmojiByCommunity
+        .get(community.id)
+        ?.find((item) => item.id === request.params.emojiId);
+      const stored = serverEmojiStorageKeys.get(request.params.emojiId);
+      if (!emoji || !stored) {
+        return problem(reply, 404, 'Emoji not found', 'Emoji not found.', request.url);
+      }
+      await storage.delete(stored.storageKey);
+      serverEmojiStorageKeys.delete(emoji.id);
+      serverEmojiByCommunity.set(
+        community.id,
+        (serverEmojiByCommunity.get(community.id) ?? []).filter((item) => item.id !== emoji.id),
+      );
+      return reply.code(204).send();
     },
   );
 
@@ -3472,23 +3730,29 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
   );
 
   // Operator backup/restore
-  app.post('/v1/operator/backup', async (request, reply) => {
-    const operatorKey = request.headers['x-operator-key'];
-    const expectedKey = process.env.OPERATOR_KEY || 'dev-operator-key-42';
-    if (operatorKey !== expectedKey) {
-      return problem(reply, 401, 'Unauthorized', 'Missing or invalid operator key.', request.url);
+  const operatorKey = process.env.OPERATOR_KEY;
+  if (!operatorKey) {
+    app.log.warn('OPERATOR_KEY is not set; operator backup and restore endpoints are unguarded.');
+  }
+
+  function requireOperatorAuth(request: FastifyRequest, reply: FastifyReply): boolean {
+    if (!operatorKey) return true;
+    if (request.headers.authorization !== `Bearer ${operatorKey}`) {
+      problem(reply, 401, 'Unauthorized', 'Missing or invalid operator key.', request.url);
+      return false;
     }
+    return true;
+  }
+
+  app.post('/v1/operator/backup', async (request, reply) => {
+    if (!requireOperatorAuth(request, reply)) return;
 
     const backup = await repo.exportBackup();
     return reply.code(200).header('content-type', 'application/json').send(backup);
   });
 
   app.post('/v1/operator/restore', async (request, reply) => {
-    const operatorKey = request.headers['x-operator-key'];
-    const expectedKey = process.env.OPERATOR_KEY || 'dev-operator-key-42';
-    if (operatorKey !== expectedKey) {
-      return problem(reply, 401, 'Unauthorized', 'Missing or invalid operator key.', request.url);
-    }
+    if (!requireOperatorAuth(request, reply)) return;
 
     const backupJson =
       typeof request.body === 'string' ? request.body : JSON.stringify(request.body);

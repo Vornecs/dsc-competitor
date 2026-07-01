@@ -1,6 +1,6 @@
 # Cove Product Plan
 
-> Last updated: 2026-06-30 | Cycle: 32 | Phase: 2b — Polish & Identity | Build health: verified; 75 tests passing across all workspaces; strict TypeScript clean
+> Last updated: 2026-06-30 | Cycle: 32 | Phase: 2b — Polish & Identity | Build health: verified; 152 tests passing (82 core + 32 web + 24 contracts + 14 desktop); strict TypeScript clean
 >
 > Current objective: Build an app you and your friends actually want to use. Phase 2b pivots from platform infrastructure to product feel — landing page, UI bug fixes, custom server emoji, user profiles, rich embeds, file upload previews, and appearance customization. Deploying to cove.demonbox360.net on Oracle Cloud via Caddy. Migrating monorepo from npm to pnpm.
 >
@@ -226,7 +226,7 @@ Native mobile, supported self-hosting, federation, knowledge channels, curated d
 | Area             | Current          | Notes                                                                                                                                                                                         |
 | ---------------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Install          | in-progress      | Migrating from npm to pnpm (Cycle 32). pnpm install will replace npm install across monorepo.                                                                                                 |
-| Unit tests       | verified         | 75 core + 24 contracts + desktop + web pass. ⚠️ Web test count discrepancy — PRODUCT_PLAN previously reported 19 web tests but exploration found only 1 in App.test.tsx; under investigation. |
+| Unit tests       | verified         | 152 total: 82 core + 32 web + 24 contracts + 14 desktop. Operator auth tests fixed Cycle 32. Emoji content endpoint test added Cycle 32.                                                      |
 | Type safety      | verified         | All five workspaces pass strict TypeScript (confirmed Cycle 30).                                                                                                                              |
 | Production build | verified         | 215 kB gzip JS (livekit-client bundled) / 5.09 kB gzip CSS; multi-stage non-root container present.                                                                                          |
 | API integration  | verified         | All Phase 1–2 endpoints covered. Cycle 30 added snapshot persistence (`SNAPSHOT_FILE`). Operator endpoints auth guard in progress (Codex Cycle 30).                                          |
