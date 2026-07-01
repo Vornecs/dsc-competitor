@@ -221,7 +221,7 @@ button {
 .community-nav {
   min-width: 0;
   display: grid;
-  grid-template-rows: 58px auto 1fr 56px;
+  grid-template-rows: 58px 1fr 56px;
   background: var(--sidebar);
   border-right: 1px solid var(--border-subtle);
 }
