@@ -1,5 +1,6 @@
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
+import rateLimit from '@fastify/rate-limit';
 import websocket from '@fastify/websocket';
 import crypto from 'node:crypto';
 import {
@@ -65,6 +66,12 @@ import type { GatewayCoordinator } from './gateway-coordinator.js';
 import { createMemoryGatewayCoordinator } from './memory-gateway-coordinator.js';
 import { type MediaProvider, FakeMediaProvider } from './media-provider.js';
 import { Resend } from 'resend';
+
+declare module 'fastify' {
+  interface FastifyContextConfig {
+    rawBody?: boolean;
+  }
+}
 
 const account = demoBootstrap.account;
 
@@ -599,6 +606,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
 
   await app.register(cors, { origin: opts.corsAllowedOrigins ?? false, credentials: false });
   await app.register(helmet, { contentSecurityPolicy: false });
+  await app.register(rateLimit, { global: false });
   await app.register(websocket);
 
   // Binary content type parsers for raw file uploads
@@ -1128,6 +1136,16 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
 
   app.post<{ Params: { channelId: string } }>(
     '/v1/channels/:channelId/messages',
+    {
+      config: {
+        rateLimit: {
+          max: 10,
+          timeWindow: '1s',
+          keyGenerator: (request) =>
+            (request as FastifyRequest & { accountId?: string }).accountId ?? request.ip,
+        },
+      },
+    },
     async (request, reply) => {
       const idempotencyKey = request.headers['idempotency-key'];
       if (typeof idempotencyKey !== 'string' || idempotencyKey.length < 8) {

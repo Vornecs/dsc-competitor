@@ -89,6 +89,29 @@ describe('core HTTP API', () => {
     expect(messageSchema.parse(created.json()).id).toBe(messageSchema.parse(replayed.json()).id);
   });
 
+  it('rate limits rapid message bursts', async () => {
+    const app = await buildApp();
+    apps.push(app);
+
+    const responses = [];
+    for (let index = 0; index < 11; index += 1) {
+      responses.push(
+        await app.inject({
+          method: 'POST',
+          url: '/v1/channels/channel-campfire/messages',
+          headers: { 'idempotency-key': `rate-limit-message-${index}` },
+          payload: { content: `Message ${index}`, clientNonce: `rate-limit-nonce-${index}` },
+        }),
+      );
+    }
+
+    expect(responses.slice(0, 10).map((response) => response.statusCode)).toEqual(
+      Array(10).fill(201),
+    );
+    expect(responses[10]!.statusCode).toBe(429);
+    expect(responses[10]!.headers['retry-after']).toBeDefined();
+  });
+
   it('paginates channel messages newest-first from a message cursor', async () => {
     const repo = createMemoryRepository();
     const messages = Array.from({ length: 5 }, (_, index) =>
