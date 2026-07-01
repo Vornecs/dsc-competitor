@@ -1,19 +1,21 @@
 ## Status — Codex — 2026-07-01
 
-**Task completed:** Codex-6 — rate limiting on message send
+**Task completed:** Codex-8 — pinned messages backend
 
 **Files changed:**
 
-- `services/core/src/app.ts` — registered route-scoped rate limiting and limited message sends to 10 per second
-- `services/core/src/app.test.ts` — covered the 11-message burst and `Retry-After` response
-- `services/core/package.json` and `package-lock.json` — added `@fastify/rate-limit`
+- `services/core/src/app.ts` — added permission-gated pin/unpin routes, pinned-message listing, and automatic pin cleanup when a message is deleted
+- `services/core/src/app.test.ts` — added pin, unpin, permission, and newest-first listing coverage
 
 **Health checks:**
 
 - `npm run typecheck`: PASSED (5 workspaces)
-- `npm test`: PASSED (186 tests: 14 desktop, 61 web, 87 core, 24 contracts)
+- `npm test`: PASSED (196 tests: 14 desktop, 68 web, 90 core, 24 contracts)
+- `prettier --check` (changed source files): PASSED
+- `git diff --check`: PASSED
 
 **Notes / flags for orchestrator:**
 
-- The limiter uses `request.accountId` when supplied by request decoration and otherwise falls back to the client IP.
-- No contract schema or WORKLOG changes were made; unrelated Antigravity/frontend worktree changes were preserved.
+- No contract schema changes were needed.
+- Pinned-message state is scoped to the running app, matching the assignment's allowed `app.ts` scope; repository persistence would require a separately assigned repository/schema change.
+- Unrelated Antigravity/frontend worktree changes were preserved.

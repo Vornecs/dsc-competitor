@@ -369,6 +369,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
   const serverEmojiByCommunity = new Map<string, ServerEmoji[]>();
   const serverEmojiStorageKeys = new Map<string, { storageKey: string; mimeType: string }>();
   const mutedChannelIdsByAccount = new Map<string, Set<string>>();
+  const pinnedMessageIdsByChannel = new Map<string, string[]>();
 
   // Seed demo messages into repository
   for (const msg of structuredClone(demoBootstrap.messages)) {
@@ -1444,6 +1445,13 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
       });
       await repo.clearMessageReactions(message.id);
       await repo.updateMessage(deleted);
+      const pinnedMessageIds = pinnedMessageIdsByChannel.get(access.channel.id);
+      if (pinnedMessageIds) {
+        pinnedMessageIdsByChannel.set(
+          access.channel.id,
+          pinnedMessageIds.filter((messageId) => messageId !== message.id),
+        );
+      }
       await recordMessageAudit(
         access.channel.communityId,
         access.actor.id,
@@ -1459,6 +1467,85 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
         await messageAudience(access.channel.communityId, 'message.read'),
       );
       return reply.code(200).send(deleted);
+    },
+  );
+
+  app.post<{ Params: { channelId: string; messageId: string } }>(
+    '/v1/channels/:channelId/messages/:messageId/pin',
+    async (request, reply) => {
+      const access = await requireManagedChannelAccess(request, reply, 'message.manage');
+      if (!access) return;
+      const message = await repo.getMessage(request.params.messageId);
+      if (!message || message.channelId !== access.channel.id) {
+        return problem(
+          reply,
+          404,
+          'Message not found',
+          'The requested message does not exist.',
+          request.url,
+        );
+      }
+      if (message.availability !== 'plaintext') {
+        return problem(
+          reply,
+          409,
+          'Message unavailable',
+          'Deleted messages cannot be pinned.',
+          request.url,
+        );
+      }
+
+      const pinnedMessageIds = pinnedMessageIdsByChannel.get(access.channel.id) ?? [];
+      pinnedMessageIdsByChannel.set(access.channel.id, [
+        message.id,
+        ...pinnedMessageIds.filter((messageId) => messageId !== message.id),
+      ]);
+      return reply.code(200).send(await materializeMessage(message, access.actor.id));
+    },
+  );
+
+  app.delete<{ Params: { channelId: string; messageId: string } }>(
+    '/v1/channels/:channelId/messages/:messageId/pin',
+    async (request, reply) => {
+      const access = await requireManagedChannelAccess(request, reply, 'message.manage');
+      if (!access) return;
+      const message = await repo.getMessage(request.params.messageId);
+      if (!message || message.channelId !== access.channel.id) {
+        return problem(
+          reply,
+          404,
+          'Message not found',
+          'The requested message does not exist.',
+          request.url,
+        );
+      }
+
+      const pinnedMessageIds = pinnedMessageIdsByChannel.get(access.channel.id) ?? [];
+      pinnedMessageIdsByChannel.set(
+        access.channel.id,
+        pinnedMessageIds.filter((messageId) => messageId !== message.id),
+      );
+      return reply.code(204).send();
+    },
+  );
+
+  app.get<{ Params: { channelId: string } }>(
+    '/v1/channels/:channelId/pinned',
+    async (request, reply) => {
+      const access = await requireManagedChannelAccess(request, reply, 'message.read');
+      if (!access) return;
+      const items = (
+        await Promise.all(
+          (pinnedMessageIdsByChannel.get(access.channel.id) ?? []).map((messageId) =>
+            repo.getMessage(messageId),
+          ),
+        )
+      ).filter((message): message is Message => Boolean(message));
+      return reply.code(200).send({
+        items: await Promise.all(
+          items.map((message) => materializeMessage(message, access.actor.id)),
+        ),
+      });
     },
   );
 

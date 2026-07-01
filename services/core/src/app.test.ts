@@ -1732,6 +1732,84 @@ describe('managed message lifecycle', () => {
     expect(JSON.stringify(ownerAudit.json())).not.toContain('private wording');
   });
 
+  it('pins a message with message.manage permission', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const { owner, member, channelId } = await setup(app);
+    const created = await sendMessage(app, channelId, member.token, 'Pin this message');
+    const messageId = created.json().id as string;
+
+    const denied = await app.inject({
+      method: 'POST',
+      url: `/v1/channels/${channelId}/messages/${messageId}/pin`,
+      headers: { authorization: `Bearer ${member.token}` },
+    });
+    expect(denied.statusCode).toBe(403);
+
+    const pinned = await app.inject({
+      method: 'POST',
+      url: `/v1/channels/${channelId}/messages/${messageId}/pin`,
+      headers: { authorization: `Bearer ${owner.token}` },
+    });
+    expect(pinned.statusCode).toBe(200);
+    expect(pinned.json()).toMatchObject({ id: messageId, content: 'Pin this message' });
+  });
+
+  it('unpins a message with message.manage permission', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const { owner, channelId } = await setup(app);
+    const created = await sendMessage(app, channelId, owner.token, 'Remove this pin');
+    const messageId = created.json().id as string;
+
+    await app.inject({
+      method: 'POST',
+      url: `/v1/channels/${channelId}/messages/${messageId}/pin`,
+      headers: { authorization: `Bearer ${owner.token}` },
+    });
+    const unpinned = await app.inject({
+      method: 'DELETE',
+      url: `/v1/channels/${channelId}/messages/${messageId}/pin`,
+      headers: { authorization: `Bearer ${owner.token}` },
+    });
+    expect(unpinned.statusCode).toBe(204);
+
+    const listed = await app.inject({
+      method: 'GET',
+      url: `/v1/channels/${channelId}/pinned`,
+      headers: { authorization: `Bearer ${owner.token}` },
+    });
+    expect(listed.json()).toEqual({ items: [] });
+  });
+
+  it('lists pinned messages newest-first', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const { owner, member, channelId } = await setup(app);
+    const first = await sendMessage(app, channelId, owner.token, 'First pin');
+    const second = await sendMessage(app, channelId, owner.token, 'Second pin');
+
+    for (const messageId of [first.json().id, second.json().id]) {
+      const response = await app.inject({
+        method: 'POST',
+        url: `/v1/channels/${channelId}/messages/${messageId}/pin`,
+        headers: { authorization: `Bearer ${owner.token}` },
+      });
+      expect(response.statusCode).toBe(200);
+    }
+
+    const listed = await app.inject({
+      method: 'GET',
+      url: `/v1/channels/${channelId}/pinned`,
+      headers: { authorization: `Bearer ${member.token}` },
+    });
+    expect(listed.statusCode).toBe(200);
+    expect(listed.json().items.map((message: { id: string }) => message.id)).toEqual([
+      second.json().id,
+      first.json().id,
+    ]);
+  });
+
   it('makes reactions idempotent, permission-gated, and removable', async () => {
     const app = await buildApp();
     apps.push(app);
