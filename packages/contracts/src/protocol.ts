@@ -79,6 +79,14 @@ export const communitySchema = z.object({
 });
 export type Community = z.infer<typeof communitySchema>;
 
+export const serverEmojiSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1).max(32).regex(/^[\w-]+$/),
+  url: z.string().min(1),
+  communityId: z.string().min(1),
+});
+export type ServerEmoji = z.infer<typeof serverEmojiSchema>;
+
 export const messageAuthorSchema = accountSchema.pick({
   id: true,
   displayName: true,

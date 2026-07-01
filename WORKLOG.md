@@ -25,10 +25,10 @@ These files are actively in flux or architecturally owned by the orchestrator. T
 
 | File | Reason |
 |------|--------|
-| `apps/web/src/App.tsx` | Active edits Cycle 31 — ask before touching |
-| `services/core/src/app.ts` | Codex active Cycle 31 |
-| `services/core/src/index.ts` | Snapshot persistence added Cycle 30 — settling |
-| `packages/contracts/src/protocol.ts` | Schema changes require full-stack coordination |
+| `apps/web/src/App.tsx` | Claude active Cycle 32 (UI bug fixes + landing page wiring) |
+| `services/core/src/app.ts` | **Codex active Cycle 32** — emoji endpoints, pagination, rate limit, presence |
+| `services/core/src/index.ts` | Snapshot persistence settled — no active edits |
+| `packages/contracts/src/protocol.ts` | Schema changes require Claude — `serverEmojiSchema` added Cycle 32, no further changes pending |
 | `PRODUCT_PLAN.md` | Authoritative delivery record |
 | `CLAUDE.md` | Orchestration rules |
 
