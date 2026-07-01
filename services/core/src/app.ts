@@ -309,7 +309,10 @@ function parseEmojiMultipart(
     const headersEnd = part.indexOf(headerSeparator);
     if (headersEnd >= 0) {
       const headers = part.subarray(0, headersEnd).toString('utf8');
-      const content = part.subarray(headersEnd + headerSeparator.length, part.length - 2);
+      const rawContent = part.subarray(headersEnd + headerSeparator.length);
+      const content = rawContent.subarray(-2).equals(Buffer.from('\r\n'))
+        ? rawContent.subarray(0, rawContent.length - 2)
+        : rawContent;
       const fieldName = headers.match(/name="([^"]+)"/i)?.[1];
       const filename = headers.match(/filename="([^"]+)"/i)?.[1];
       if (fieldName === 'name' && !filename) name = content.toString('utf8');
@@ -689,8 +692,6 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
             if (activeCommunityChannels.length > 0) {
               activeChannelId = activeCommunityChannels[0]!.id;
               messages = await repo.getMessagesByChannel(activeChannelId);
-            } else {
-              activeChannelId = 'channel-placeholder';
             }
           }
 

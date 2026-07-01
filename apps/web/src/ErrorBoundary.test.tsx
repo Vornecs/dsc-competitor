@@ -53,29 +53,19 @@ describe('ErrorBoundary', () => {
     consoleErrorSpy.mockRestore();
   });
 
-  it('calls window.location.reload when reload button is clicked', async () => {
+  it('calls onReload when the reload button is clicked', async () => {
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const user = userEvent.setup();
-
-    const reloadMock = vi.fn();
-    const originalLocation = window.location;
-
-    // Delete and mock window.location safely in tests using window as any
-    delete (window as any).location;
-    (window as any).location = { reload: reloadMock };
+    const onReload = vi.fn();
 
     render(
-      <ErrorBoundary>
+      <ErrorBoundary onReload={onReload}>
         <ProblemChild shouldThrow={true} />
       </ErrorBoundary>,
     );
 
     await user.click(screen.getByRole('button', { name: 'Reload' }));
-    expect(reloadMock).toHaveBeenCalledTimes(1);
-
-    // Restore original location
-    delete (window as any).location;
-    (window as any).location = originalLocation;
+    expect(onReload).toHaveBeenCalledTimes(1);
 
     consoleErrorSpy.mockRestore();
   });

@@ -3,6 +3,7 @@ import React, { Component, type ErrorInfo, type ReactNode } from 'react';
 export interface ErrorBoundaryProps {
   children: ReactNode;
   fallback?: ReactNode;
+  onReload?: () => void;
 }
 
 export interface ErrorBoundaryState {
@@ -25,7 +26,11 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
   }
 
   handleReload = () => {
-    window.location.reload();
+    if (this.props.onReload) {
+      this.props.onReload();
+    } else {
+      window.location.reload();
+    }
   };
 
   override render() {
