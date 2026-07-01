@@ -316,9 +316,7 @@ export function Landing({ onSignIn }: LandingProps) {
           </div>
         </section>
 
-        <footer className="landing-footer">
-          Built for friends, not engagement.
-        </footer>
+        <footer className="landing-footer">Built for friends, not engagement.</footer>
       </div>
     </div>
   );

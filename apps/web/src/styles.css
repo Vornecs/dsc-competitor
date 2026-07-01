@@ -1473,7 +1473,9 @@ button {
   padding: 4px;
   cursor: pointer;
   border-radius: 4px;
-  transition: background 0.15s, transform 0.1s;
+  transition:
+    background 0.15s,
+    transform 0.1s;
 }
 
 .emoji-picker button:hover {
@@ -1511,7 +1513,9 @@ button {
   width: 20px;
   height: 20px;
   border-radius: 50%;
-  transition: background 0.15s, color 0.15s;
+  transition:
+    background 0.15s,
+    color 0.15s;
 }
 
 .reply-bar button:hover {
@@ -1613,7 +1617,9 @@ button {
   font-size: 14px;
   font-weight: 600;
   cursor: pointer;
-  transition: background 0.15s, transform 0.1s;
+  transition:
+    background 0.15s,
+    transform 0.1s;
 }
 
 .error-boundary-card button:hover {
@@ -1724,6 +1730,3 @@ button {
 .user-avatar-status--offline {
   background-color: var(--text-muted, #747f8d);
 }
-
-
-

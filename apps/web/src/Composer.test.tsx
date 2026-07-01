@@ -14,7 +14,7 @@ describe('Composer', () => {
         replyTo={null}
         onCancelReply={() => {}}
         placeholder="Message general"
-      />
+      />,
     );
 
     const textarea = screen.getByPlaceholderText('Message general');
@@ -34,7 +34,7 @@ describe('Composer', () => {
         onSend={() => {}}
         replyTo={null}
         onCancelReply={() => {}}
-      />
+      />,
     );
 
     const textarea = screen.getByRole('textbox');
@@ -53,7 +53,7 @@ describe('Composer', () => {
         onSend={onSend}
         replyTo={null}
         onCancelReply={() => {}}
-      />
+      />,
     );
 
     const sendBtn = screen.getByRole('button', { name: 'Send message' });
@@ -74,7 +74,7 @@ describe('Composer', () => {
         onSend={onSend}
         replyTo={null}
         onCancelReply={() => {}}
-      />
+      />,
     );
 
     const textarea = screen.getByRole('textbox');
@@ -94,7 +94,7 @@ describe('Composer', () => {
         onSend={onSend}
         replyTo={null}
         onCancelReply={() => {}}
-      />
+      />,
     );
 
     const textarea = screen.getByRole('textbox');
@@ -114,7 +114,7 @@ describe('Composer', () => {
         onSend={() => {}}
         replyTo={{ id: 'msg-1', preview: 'hello world' }}
         onCancelReply={onCancelReply}
-      />
+      />,
     );
 
     expect(screen.getByTestId('reply-bar')).toBeInTheDocument();
@@ -135,10 +135,12 @@ describe('Composer', () => {
         replyTo={null}
         onCancelReply={() => {}}
         isSealed={true}
-      />
+      />,
     );
 
-    expect(screen.getByText(/Sealed messaging enters after the reviewed MLS adapter/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Sealed messaging enters after the reviewed MLS adapter/),
+    ).toBeInTheDocument();
     expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
   });
 
@@ -151,7 +153,7 @@ describe('Composer', () => {
         replyTo={null}
         onCancelReply={() => {}}
         disabled={true}
-      />
+      />,
     );
 
     const textarea = screen.getByRole('textbox');

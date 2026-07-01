@@ -35,11 +35,7 @@ export function Composer({
       {replyTo && (
         <div className="reply-bar" data-testid="reply-bar">
           <span>Replying to: {replyTo.preview}</span>
-          <button
-            type="button"
-            aria-label="Cancel reply"
-            onClick={onCancelReply}
-          >
+          <button type="button" aria-label="Cancel reply" onClick={onCancelReply}>
             ×
           </button>
         </div>

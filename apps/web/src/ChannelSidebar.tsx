@@ -53,7 +53,10 @@ export function ChannelSidebar({
               const isVoiceOrStage = channel.kind === 'voice' || channel.kind === 'stage';
               return (
                 <div key={channel.id}>
-                  <div className="channel-button-wrapper" style={{ display: 'flex', alignItems: 'center', position: 'relative' }}>
+                  <div
+                    className="channel-button-wrapper"
+                    style={{ display: 'flex', alignItems: 'center', position: 'relative' }}
+                  >
                     <button
                       className={`channel-button ${channel.id === activeChannelId ? 'is-active' : ''} ${isMuted ? 'is-muted' : ''}`}
                       onClick={() => onSelectChannel(channel.id)}
@@ -106,9 +109,7 @@ export function ChannelSidebar({
                               size="small"
                             />
                             <span>{person.displayName}</span>
-                            {isSpeaker && (
-                              <span className="speaking-bars" aria-label="Speaking" />
-                            )}
+                            {isSpeaker && <span className="speaking-bars" aria-label="Speaking" />}
                             {person.participantRole && (
                               <span
                                 className={`role-badge role-badge--${person.participantRole}`}
@@ -140,12 +141,22 @@ export function ChannelSidebar({
                           const subMuted = mutedChannelIds.has(sub.id);
                           return (
                             <div key={sub.id} className="subchannel-container">
-                              <div className="channel-button-wrapper" style={{ display: 'flex', alignItems: 'center', position: 'relative' }}>
+                              <div
+                                className="channel-button-wrapper"
+                                style={{
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  position: 'relative',
+                                }}
+                              >
                                 <button
                                   className={`channel-button channel-button--sub ${subActive ? 'is-active' : ''} ${subMuted ? 'is-muted' : ''}`}
                                   onClick={() => onSelectChannel(sub.id)}
                                   type="button"
-                                  style={{ flex: 1, textDecoration: subMuted ? 'line-through' : 'none' }}
+                                  style={{
+                                    flex: 1,
+                                    textDecoration: subMuted ? 'line-through' : 'none',
+                                  }}
                                 >
                                   <ChannelIcon channel={sub} />
                                   <span style={{ opacity: subMuted ? 0.5 : 1 }}>{sub.name}</span>
@@ -179,9 +190,9 @@ export function ChannelSidebar({
                               {sub.participants.length > 0 && (
                                 <div className="voice-members" style={{ paddingLeft: '16px' }}>
                                   {sub.participants.map((person) => {
-                                    const hasScreenShare = (
-                                      channelScreenShares[sub.id] || []
-                                    ).some((s) => s.participantId === person.id);
+                                    const hasScreenShare = (channelScreenShares[sub.id] || []).some(
+                                      (s) => s.participantId === person.id,
+                                    );
                                     const isSpeaker = person.participantRole === 'speaker';
                                     return (
                                       <div key={person.id}>

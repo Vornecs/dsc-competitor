@@ -10,6 +10,7 @@
 **Do not edit WORKLOG.md directly.** Instead, write your status to `status/<your-name>.md` (e.g. `status/codex.md`, `status/antigravity.md`). The orchestrator reads all status files during the daily review and updates this log.
 
 Your status file should contain:
+
 - Task you completed (one line)
 - Files you changed
 - Whether `npm run typecheck && npm test` passed
@@ -23,14 +24,14 @@ The `status/` directory is always safe to write to — it is never a hot file.
 
 These files are actively in flux or architecturally owned by the orchestrator. Touching them without explicit assignment risks merge conflicts and broken state.
 
-| File | Reason |
-|------|--------|
-| `apps/web/src/App.tsx` | **Claude active Cycle 34** — wiring MessageList/Composer/ChannelSidebar/Skeleton/EmojiPicker/UserAvatar (all built, still unwired), channel-creation UI, first-run empty-space onboarding view |
-| `services/core/src/app.ts` | **Codex active Cycle 34** — rate limiting (Codex-6), pinned messages (Codex-8), new attention-persistence endpoints (Codex-9). Claude made two more surgical fixes this cycle (see Completed section): message pagination + mute persistence (previously assigned as Codex-4/5, shipped by Claude directly to unblock Cycle 33), and the demo-data bootstrap leak fix. Pull latest before starting. |
-| `services/core/src/index.ts` | Snapshot persistence settled — no active edits |
-| `packages/contracts/src/protocol.ts` | Schema changes require Claude — `serverEmojiSchema` added Cycle 32, no further changes pending |
-| `PRODUCT_PLAN.md` | Authoritative delivery record |
-| `CLAUDE.md` | Orchestration rules |
+| File                                 | Reason                                                                                                                                                                                                                                                                                                                                                                                              |
+| ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `apps/web/src/App.tsx`               | **Claude active Cycle 34** — wiring MessageList/Composer/ChannelSidebar/Skeleton/EmojiPicker/UserAvatar (all built, still unwired), channel-creation UI, first-run empty-space onboarding view                                                                                                                                                                                                      |
+| `services/core/src/app.ts`           | **Codex active Cycle 34** — rate limiting (Codex-6), pinned messages (Codex-8), new attention-persistence endpoints (Codex-9). Claude made two more surgical fixes this cycle (see Completed section): message pagination + mute persistence (previously assigned as Codex-4/5, shipped by Claude directly to unblock Cycle 33), and the demo-data bootstrap leak fix. Pull latest before starting. |
+| `services/core/src/index.ts`         | Snapshot persistence settled — no active edits                                                                                                                                                                                                                                                                                                                                                      |
+| `packages/contracts/src/protocol.ts` | Schema changes require Claude — `serverEmojiSchema` added Cycle 32, no further changes pending                                                                                                                                                                                                                                                                                                      |
+| `PRODUCT_PLAN.md`                    | Authoritative delivery record                                                                                                                                                                                                                                                                                                                                                                       |
+| `CLAUDE.md`                          | Orchestration rules                                                                                                                                                                                                                                                                                                                                                                                 |
 
 > Note: `WORKLOG.md` is **not** hot — but write to `status/<name>.md` instead of editing it directly. The orchestrator reconciles status files into this log during the daily review.
 
@@ -55,12 +56,14 @@ These files are actively in flux or architecturally owned by the orchestrator. T
 ### Claude — in progress
 
 **Wire built-but-unwired components into App.tsx (carried over, growing list):**
+
 - [ ] `EmojiPicker.tsx` → message reaction/composer flow
 - [ ] `UserAvatar.tsx` → message author display + user dock
 - [ ] `Skeleton.tsx` → loading placeholders (replace ad-hoc loading markup)
 - [ ] `MessageList.tsx`, `Composer.tsx`, `ChannelSidebar.tsx` → extract corresponding inline JSX out of `App.tsx` in favor of the built components (shrinks the 2100+ line file substantially)
 
 **New from this cycle's live verification + operator note:**
+
 - [ ] **Channel-creation UI** — backend route already exists and works (`POST /v1/communities/:communityId/channels`, owner/admin only, `services/core/src/app.ts:2466`); there is no button/modal to call it. This is why servers with few channels have no way to add more.
 - [ ] **First-run empty-space onboarding view** — now that `GET /v1/bootstrap` correctly returns `communities: []` for new accounts (fixed this cycle) instead of injecting demo data, the frontend needs an actual "create or join your first space" screen for that state (`bootstrap.activeCommunityId === 'no-community'`) instead of falling through to the anonymous loading-placeholder community.
 - [ ] **Empty/short channel-list layout bug** — reported by operator: on communities with 0-1 channels, the bottom user dock (mute/settings/etc.) grows upward and overlaps the channel list. Root cause not yet isolated — likely a flex/height rule assuming a minimum channel-list height. Needs a CSS pass once channel-creation UI exists to test against (can't fully verify the empty case without it).
@@ -69,6 +72,7 @@ These files are actively in flux or architecturally owned by the orchestrator. T
 - [ ] Remove hardcoded "Practice run · Tonight · 6 interested" event card
 
 **pnpm migration:**
+
 - [ ] Replace npm with pnpm across monorepo: add `pnpm-workspace.yaml`, remove `package-lock.json`, install with pnpm, update `package.json` scripts, update CLAUDE.md run instructions
 
 ---
@@ -85,7 +89,7 @@ These files are actively in flux or architecturally owned by the orchestrator. T
 
 **Codex-7:** Fill the one test-coverage gap Kimi flagged (P4 report, Cycle 32)  
 Files: `services/core/src/app.test.ts` only  
-Details: `GET /v1/communities/:communityId/emoji/:emojiId/content` (serves binary emoji content) has no direct test — the existing upload test only asserts the returned `url` *contains* the path. Add a test that actually fetches the endpoint and checks the response body/content-type match what was uploaded.
+Details: `GET /v1/communities/:communityId/emoji/:emojiId/content` (serves binary emoji content) has no direct test — the existing upload test only asserts the returned `url` _contains_ the path. Add a test that actually fetches the endpoint and checks the response body/content-type match what was uploaded.
 
 **Codex-8:** Pinned messages backend (P3 item 18)  
 Files: `services/core/src/app.ts` + `packages/contracts/src/protocol.ts` (flag Claude if a schema change is needed) + test  
@@ -131,7 +135,7 @@ Details: Extract the voice/stage participant panel rendering from `App.tsx` into
 - **`/register` route and path-based channel URLs are both unresolved routing decisions.** The operator note this cycle asked for real paths (`cove.demonbox360.net/[server]/[channel]`), which is the same underlying decision as the `/register` route: the app has no client router today. Recommending React Router be adopted in Cycle 35 — it would resolve both asks at once (deep-linkable channels + a real `/register` path) rather than continuing to bolt state-based workarounds onto a single-page shell. Flagging for explicit go-ahead rather than starting a router migration unprompted.
 - **Employee/staff/admin user type** — operator flagged this as a longer-term want, not urgent. Added to P3 backlog (item 34) rather than scheduled; needs a role-model decision (separate from community-level roles) before scoping.
 - **Antigravity Cycle 30 status file absent:** Backend reaction/reply tests are committed (git `e12122f`) — task is complete; status file was not written. No action needed.
-- **Copilot's automated PR review on PR #2 (2026-07-01) flagged 6 real issues** — 3 fixed directly this cycle (ErrorBoundary reload test's `window.location` monkey-patching, `channel-placeholder` sentinel unified with `no-channel`, `parseEmojiMultipart` no longer unconditionally trims 2 bytes assuming a trailing CRLF). 1 turned into Codex-10 (emoji metadata not persisted through the Repository layer). 1 is the PR description being stale relative to actual scope — needs an update, low risk, can be done anytime. **1 needs an operator decision, not a silent fix:** `requireOperatorAuth` (`app.ts:3799`) returns `true` (i.e., allows the request) whenever `OPERATOR_KEY` is unset, so a deployment that forgets to set it exposes full backup export *and* restore-overwrite with zero authentication. There's an existing test (`app.test.ts` ~line 2594, "rejects operator backup and restore without the configured operator key" — despite the name, it currently asserts the *unguarded* fail-open behavior for the no-key case) that codifies this as intentional, presumably for zero-config local dev convenience. Recommend failing closed by default (503 until `OPERATOR_KEY` is set) with the current permissive behavior kept only in test/dev builds — but this changes production security posture and touches an already-tested contract, so flagging for an explicit call rather than changing it under an unrelated review pass.
+- **Copilot's automated PR review on PR #2 (2026-07-01) flagged 6 real issues** — 3 fixed directly this cycle (ErrorBoundary reload test's `window.location` monkey-patching, `channel-placeholder` sentinel unified with `no-channel`, `parseEmojiMultipart` no longer unconditionally trims 2 bytes assuming a trailing CRLF). 1 turned into Codex-10 (emoji metadata not persisted through the Repository layer). 1 is the PR description being stale relative to actual scope — needs an update, low risk, can be done anytime. **1 needs an operator decision, not a silent fix:** `requireOperatorAuth` (`app.ts:3799`) returns `true` (i.e., allows the request) whenever `OPERATOR_KEY` is unset, so a deployment that forgets to set it exposes full backup export _and_ restore-overwrite with zero authentication. There's an existing test (`app.test.ts` ~line 2594, "rejects operator backup and restore without the configured operator key" — despite the name, it currently asserts the _unguarded_ fail-open behavior for the no-key case) that codifies this as intentional, presumably for zero-config local dev convenience. Recommend failing closed by default (503 until `OPERATOR_KEY` is set) with the current permissive behavior kept only in test/dev builds — but this changes production security posture and touches an already-tested contract, so flagging for an explicit call rather than changing it under an unrelated review pass.
 
 ---
 
@@ -140,6 +144,7 @@ Details: Extract the voice/stage participant panel rendering from `App.tsx` into
 Claude pulls from here when agent work is integrated. Agents work from their own queues above.
 
 ### P0 — UI bugs and broken flows
+
 1. ✅ ~~Attention center panel~~ — done Cycle 31
 2. ✅ ~~Create/join space modal~~ — done Cycle 31
 3. ✅ ~~Bootstrap loading state~~ — done Cycle 31
@@ -148,26 +153,29 @@ Claude pulls from here when agent work is integrated. Agents work from their own
 6. **Attention panel orphaned × buttons** — layout needs a proper pass — Claude Cycle 34 queue
 7. **Settings button buried under user profile** — needs to be accessible — Claude Cycle 34 queue
 8. **Hardcoded event card** — remove the "Practice run" static fallback — Claude Cycle 34 queue
-8a. ✅ ~~Blank screen on community creation~~ — done Cycle 33 (default channel + fallback placeholder)
-8b. ✅ ~~"Join a space" 404/crash~~ — done Cycle 33 (URL + response contract fix)
-8c. ✅ ~~Demo data leaked into new accounts~~ — done Cycle 33 (bootstrap fix, verified live)
-8d. **No UI to create channels** — backend route exists and works; frontend has no entry point. Assigned AG-9 (component) + Claude (wiring).
-8e. **Empty/short channel-list pushes the user dock up** — CSS layout bug. Assigned AG-11.
-8f. **No first-run onboarding for zero-community accounts** — Claude Cycle 34 queue.
-8g. **Attention mark-as-read/dismiss don't persist** — client-state only, reset on bootstrap refetch. Assigned Codex-9 (backend) + Claude (wiring once shipped).
+   8a. ✅ ~~Blank screen on community creation~~ — done Cycle 33 (default channel + fallback placeholder)
+   8b. ✅ ~~"Join a space" 404/crash~~ — done Cycle 33 (URL + response contract fix)
+   8c. ✅ ~~Demo data leaked into new accounts~~ — done Cycle 33 (bootstrap fix, verified live)
+   8d. **No UI to create channels** — backend route exists and works; frontend has no entry point. Assigned AG-9 (component) + Claude (wiring).
+   8e. **Empty/short channel-list pushes the user dock up** — CSS layout bug. Assigned AG-11.
+   8f. **No first-run onboarding for zero-community accounts** — Claude Cycle 34 queue.
+   8g. **Attention mark-as-read/dismiss don't persist** — client-state only, reset on bootstrap refetch. Assigned Codex-9 (backend) + Claude (wiring once shipped).
 
 ### P1 — Landing page & routing
+
 9. ✅ ~~Marketing page at `/`~~ — done Cycle 33 (`Landing.tsx`)
 10. ✅ ~~Sign-in flow~~ — done Cycle 33 (reused existing modal; no separate `/login` route since there's no router)
 11. **`/register` route + path-based channel URLs** — both blocked on the same routing decision (adopt React Router vs. continue modal/state-only). Recommending React Router for Cycle 35 — see Flags above; needs explicit go-ahead.
 
 ### P2 — Identity & customization
+
 12. **User avatars** — `UserAvatar.tsx` built (AG-3) but not wired into message authors / user dock yet — Claude Cycle 34 queue
 13. **Custom status** — text + emoji, shows in presence display
 14. **Custom server emoji** — backend done (Codex-2); still needs Claude to wire message renderer + `EmojiPicker.tsx` (also already built, unwired) — Claude Cycle 34 queue
 15. **Themes & appearance** — dark/light toggle + accent color + presets
 
 ### P3 — Core messaging polish
+
 16. **Rich link embeds** — YouTube, Twitter/X, images, OG tags unfurl inline
 17. **File & image uploads** — drag-drop, inline previews
 18. **Pinned messages** — mod-accessible, shown in channel header. Backend assigned Codex-8.
@@ -177,19 +185,22 @@ Claude pulls from here when agent work is integrated. Agents work from their own
 22. **Frontend error reporting** — `window.onerror` → `showToast()`
 
 ### P2 — Architecture
+
 23. **App.tsx component extraction** (multi-step — Antigravity builds, Claude wires):
-   - EmojiPicker.tsx → AG-1 ✅ built, unwired
-   - ErrorBoundary.tsx → AG-2 ✅ built, wired
-   - UserAvatar.tsx → AG-3 ✅ built, unwired
-   - Skeleton.tsx → AG-4 ✅ built, unwired
-   - MessageList.tsx → AG-5 ✅ built, unwired
-   - Composer.tsx → AG-6 ✅ built, unwired
-   - ChannelSidebar.tsx → AG-7 ✅ built, unwired
-   - NewChannelModal.tsx → AG-9 (current)
-   - AttentionPanel.tsx → AG-10
-   - VoicePanel.tsx → AG-12
+
+- EmojiPicker.tsx → AG-1 ✅ built, unwired
+- ErrorBoundary.tsx → AG-2 ✅ built, wired
+- UserAvatar.tsx → AG-3 ✅ built, unwired
+- Skeleton.tsx → AG-4 ✅ built, unwired
+- MessageList.tsx → AG-5 ✅ built, unwired
+- Composer.tsx → AG-6 ✅ built, unwired
+- ChannelSidebar.tsx → AG-7 ✅ built, unwired
+- NewChannelModal.tsx → AG-9 (current)
+- AttentionPanel.tsx → AG-10
+- VoicePanel.tsx → AG-12
 
 ### P3 — Features
+
 24. **Passkey auth UI** — WebAuthn browser-side form. Backend routes exist at `/v1/auth/passkey/*`. New `PasskeyFlow.tsx` component + wiring in App.tsx sign-in modal.
 25. **Community settings panel** — `<ChevronDown>` on community header: modal with name edit (`PATCH /v1/communities/:id`), channel list management, member list with role assignment.
 26. **Guided report flow** — Multi-step modal: select report type → context → submit to `POST /v1/reports`. Phase 3 per product plan.
@@ -203,6 +214,7 @@ Claude pulls from here when agent work is integrated. Agents work from their own
 34. **Staff/admin user type** — long-term want from operator (2026-07-01), for platform-level management/moderation distinct from per-community roles. No scoping done yet — needs a role-model decision first.
 
 ### P4 — Other agents (Kimi, Deepseek, Qwen, etc.)
+
 Safe for any agent regardless of codebase familiarity. Read `CLAUDE.md` before starting. Write output to `status/<agent-name>.md`. Do not edit any source files unless the task explicitly says to.
 
 - ✅ ~~Test coverage gap report~~ — done Cycle 32 (Kimi); 1 gap found, assigned Codex-7
@@ -216,6 +228,7 @@ Safe for any agent regardless of codebase familiarity. Read `CLAUDE.md` before s
 - **Frontend/backend route contract audit** — For every `fetch(`${API_BASE}/v1/...`)` call in `apps/web/src/App.tsx`, find the matching route registration in `services/core/src/app.ts` (same path template and HTTP method) and confirm the response shape the frontend destructures actually matches what the backend sends (status code included — watch for `204`/no-body routes being `.json()`-parsed, and for backend fallback paths that only trigger on empty/zero state — that's how the Cycle 33 demo-data leak slipped through). Report every mismatch found, with file:line for both sides. Do not edit source files — report only.
 
 ### P5 — Deferred by design
+
 - Sealed E2EE (awaiting MLS external review — D-004)
 - Native mobile (Phase 5)
 - Federation (Year 2+)
@@ -226,6 +239,7 @@ Safe for any agent regardless of codebase familiarity. Read `CLAUDE.md` before s
 ## Integration protocol
 
 When an agent writes to `status/<name>.md`:
+
 1. Orchestrator reads the file during daily review
 2. Runs `npm run typecheck && npm test`
 3. Verifies Definition of Done (CLAUDE.md)
@@ -236,20 +250,20 @@ When an agent writes to `status/<name>.md`:
 
 ## Cycle history
 
-| Cycle | What shipped |
-|-------|-------------|
-| 34 | (in progress) |
-| 33 | Landing page gated on session token, demo/preview bootstrap fully removed from the authenticated path; fixed three P0 bugs verified live (community-creation blank screen, broken invite-join flow, demo-data leak into new accounts); message pagination + mute persistence shipped; Skeleton/MessageList/Composer/ChannelSidebar components built (unwired); 174 tests green |
-| 32 | Vision pivot (friends-first, D-019–D-023), custom emoji endpoints + Resend email (Codex), ErrorBoundary + UserAvatar components (AG), operator auth test fix, emoji content test, 152 tests green |
-| 31 | Operator auth test fix, toast CSS cleanup, attention panel, create/join modal, bootstrap loading state |
-| 30 | Foundation repair: community switching, reactions, replies, WS reconnect, snapshot persistence, error toasts, orchestration setup |
-| 29 | Attention controls: mark-all-read, dismiss, channel mute |
-| 28 | `reconcileParticipantRole` export, stage UI test coverage |
-| 27 | Web client voice/stage LiveKit integration, screen share track publication |
-| 26 | LiveKit media provider integration |
-| 25 | Stage channel UI, hover peek, screen-share badges, desktop PTT |
-| 24 | Stage speaking permission gate |
-| 23 | Stage broadcast subchannels, hover-to-eavesdrop, screen-share contracts |
-| 22 | Authenticated web session/bootstrap, voice participant reconciliation |
-| 21 | Community export, web audit log panel |
-| 1–20 | See PRODUCT_PLAN.md session checkpoints |
+| Cycle | What shipped                                                                                                                                                                                                                                                                                                                                                                   |
+| ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 34    | (in progress)                                                                                                                                                                                                                                                                                                                                                                  |
+| 33    | Landing page gated on session token, demo/preview bootstrap fully removed from the authenticated path; fixed three P0 bugs verified live (community-creation blank screen, broken invite-join flow, demo-data leak into new accounts); message pagination + mute persistence shipped; Skeleton/MessageList/Composer/ChannelSidebar components built (unwired); 174 tests green |
+| 32    | Vision pivot (friends-first, D-019–D-023), custom emoji endpoints + Resend email (Codex), ErrorBoundary + UserAvatar components (AG), operator auth test fix, emoji content test, 152 tests green                                                                                                                                                                              |
+| 31    | Operator auth test fix, toast CSS cleanup, attention panel, create/join modal, bootstrap loading state                                                                                                                                                                                                                                                                         |
+| 30    | Foundation repair: community switching, reactions, replies, WS reconnect, snapshot persistence, error toasts, orchestration setup                                                                                                                                                                                                                                              |
+| 29    | Attention controls: mark-all-read, dismiss, channel mute                                                                                                                                                                                                                                                                                                                       |
+| 28    | `reconcileParticipantRole` export, stage UI test coverage                                                                                                                                                                                                                                                                                                                      |
+| 27    | Web client voice/stage LiveKit integration, screen share track publication                                                                                                                                                                                                                                                                                                     |
+| 26    | LiveKit media provider integration                                                                                                                                                                                                                                                                                                                                             |
+| 25    | Stage channel UI, hover peek, screen-share badges, desktop PTT                                                                                                                                                                                                                                                                                                                 |
+| 24    | Stage speaking permission gate                                                                                                                                                                                                                                                                                                                                                 |
+| 23    | Stage broadcast subchannels, hover-to-eavesdrop, screen-share contracts                                                                                                                                                                                                                                                                                                        |
+| 22    | Authenticated web session/bootstrap, voice participant reconciliation                                                                                                                                                                                                                                                                                                          |
+| 21    | Community export, web audit log panel                                                                                                                                                                                                                                                                                                                                          |
+| 1–20  | See PRODUCT_PLAN.md session checkpoints                                                                                                                                                                                                                                                                                                                                        |

@@ -13,13 +13,16 @@ Create or overwrite `status/<your-name>.md` when you finish a task. Example:
 **Task completed:** Guarded operator endpoints with OPERATOR_KEY auth
 
 **Files changed:**
+
 - `services/core/src/app.ts` (added auth check around lines 3475–3486)
 
 **Health checks:**
+
 - `npm run typecheck`: PASSED
 - `npm test`: PASSED (X tests)
 
 **Notes / flags for orchestrator:**
+
 - Startup warning logs when OPERATOR_KEY is unset (intentional)
 - No schema changes made
 ```
@@ -27,6 +30,7 @@ Create or overwrite `status/<your-name>.md` when you finish a task. Example:
 The orchestrator reads all files in this directory during the daily 9 AM review and reconciles them into WORKLOG.md.
 
 ## Rules
+
 - One file per agent: `status/codex.md`, `status/antigravity.md`, `status/kimi.md`, etc.
 - Overwrite your file each time — no need to append history, WORKLOG tracks that
 - If you have nothing to report, leave your file as-is (don't delete it)

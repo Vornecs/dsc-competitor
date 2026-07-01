@@ -13,21 +13,37 @@ describe('Landing', () => {
     expect(screen.getByRole('button', { name: 'Sign In' })).toBeInTheDocument();
 
     // Hero elements
-    expect(screen.getByRole('heading', { level: 2, name: 'Your space. Your friends.' })).toBeInTheDocument();
     expect(
-      screen.getByText('Private voice and text communities, no ads, no algorithms, no noise.')
+      screen.getByRole('heading', { level: 2, name: 'Your space. Your friends.' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('Private voice and text communities, no ads, no algorithms, no noise.'),
     ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Get Early Access →' })).toBeInTheDocument();
 
     // Features
     expect(screen.getByRole('heading', { level: 3, name: 'Voice that works' })).toBeInTheDocument();
-    expect(screen.getByText('Low-latency spatial audio that makes you feel like you are in the same room.')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'Low-latency spatial audio that makes you feel like you are in the same room.',
+      ),
+    ).toBeInTheDocument();
 
-    expect(screen.getByRole('heading', { level: 3, name: 'Spaces that feel like yours' })).toBeInTheDocument();
-    expect(screen.getByText('Organize your discussions with customizable channels and flexible permissions.')).toBeInTheDocument();
+    expect(
+      screen.getByRole('heading', { level: 3, name: 'Spaces that feel like yours' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'Organize your discussions with customizable channels and flexible permissions.',
+      ),
+    ).toBeInTheDocument();
 
-    expect(screen.getByRole('heading', { level: 3, name: 'Privacy by default' })).toBeInTheDocument();
-    expect(screen.getByText('No advertising, no data-mining, and no algorithmic feeds to distract you.')).toBeInTheDocument();
+    expect(
+      screen.getByRole('heading', { level: 3, name: 'Privacy by default' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('No advertising, no data-mining, and no algorithmic feeds to distract you.'),
+    ).toBeInTheDocument();
 
     // Footer
     expect(screen.getByText('Built for friends, not engagement.')).toBeInTheDocument();

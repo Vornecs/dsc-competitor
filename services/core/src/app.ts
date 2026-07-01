@@ -292,7 +292,10 @@ function parseEmojiMultipart(
   body: Buffer,
   contentType: string | undefined,
 ): { name: string; filename: string; mimeType: string; data: Buffer } | undefined {
-  const boundary = contentType?.match(/boundary=(?:"([^"]+)"|([^;]+))/i)?.slice(1).find(Boolean);
+  const boundary = contentType
+    ?.match(/boundary=(?:"([^"]+)"|([^;]+))/i)
+    ?.slice(1)
+    .find(Boolean);
   if (!boundary) return undefined;
 
   const marker = Buffer.from(`--${boundary}`);

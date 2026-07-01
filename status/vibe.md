@@ -3,11 +3,13 @@
 **Task completed:** Spell-check and prose cleanup — analysis of PRODUCT_PLAN.md, README.md, and CLAUDE.md
 
 **Files analyzed (read-only):**
+
 - `PRODUCT_PLAN.md`
 - `README.md`
 - `CLAUDE.md`
 
 **Health checks:**
+
 - No code changes made — read-only analysis only
 - `npm run typecheck` and `npm test` not applicable for this task
 

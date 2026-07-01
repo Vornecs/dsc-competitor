@@ -13,7 +13,13 @@ const mockChannels: Channel[] = [
     kind: 'text',
     category: 'TEXT CHANNELS',
     topic: 'General discussion',
-    privacy: { mode: 'managed', searchableByServer: false, appsMayReadContent: false, deletedContentRecoveryDays: 0, evidenceRetentionDays: 0 },
+    privacy: {
+      mode: 'managed',
+      searchableByServer: false,
+      appsMayReadContent: false,
+      deletedContentRecoveryDays: 0,
+      evidenceRetentionDays: 0,
+    },
     participants: [],
   },
   {
@@ -23,7 +29,13 @@ const mockChannels: Channel[] = [
     kind: 'text',
     category: 'TEXT CHANNELS',
     topic: 'Gaming chat',
-    privacy: { mode: 'managed', searchableByServer: false, appsMayReadContent: false, deletedContentRecoveryDays: 0, evidenceRetentionDays: 0 },
+    privacy: {
+      mode: 'managed',
+      searchableByServer: false,
+      appsMayReadContent: false,
+      deletedContentRecoveryDays: 0,
+      evidenceRetentionDays: 0,
+    },
     participants: [],
   },
   {
@@ -33,10 +45,28 @@ const mockChannels: Channel[] = [
     kind: 'voice',
     category: 'VOICE CHANNELS',
     topic: '',
-    privacy: { mode: 'managed', searchableByServer: false, appsMayReadContent: false, deletedContentRecoveryDays: 0, evidenceRetentionDays: 0 },
+    privacy: {
+      mode: 'managed',
+      searchableByServer: false,
+      appsMayReadContent: false,
+      deletedContentRecoveryDays: 0,
+      evidenceRetentionDays: 0,
+    },
     participants: [
-      { id: 'user-1', displayName: 'Alice Smith', initials: 'AS', status: 'online', participantRole: 'speaker' },
-      { id: 'user-2', displayName: 'Bob Jones', initials: 'BJ', status: 'idle', participantRole: 'listener' },
+      {
+        id: 'user-1',
+        displayName: 'Alice Smith',
+        initials: 'AS',
+        status: 'online',
+        participantRole: 'speaker',
+      },
+      {
+        id: 'user-2',
+        displayName: 'Bob Jones',
+        initials: 'BJ',
+        status: 'idle',
+        participantRole: 'listener',
+      },
     ],
   },
   {
@@ -46,7 +76,13 @@ const mockChannels: Channel[] = [
     kind: 'stage',
     category: 'VOICE CHANNELS',
     topic: '',
-    privacy: { mode: 'managed', searchableByServer: false, appsMayReadContent: false, deletedContentRecoveryDays: 0, evidenceRetentionDays: 0 },
+    privacy: {
+      mode: 'managed',
+      searchableByServer: false,
+      appsMayReadContent: false,
+      deletedContentRecoveryDays: 0,
+      evidenceRetentionDays: 0,
+    },
     participants: [],
   },
   {
@@ -57,7 +93,13 @@ const mockChannels: Channel[] = [
     category: 'VOICE CHANNELS',
     parentChannelId: 'chan-4',
     topic: '',
-    privacy: { mode: 'managed', searchableByServer: false, appsMayReadContent: false, deletedContentRecoveryDays: 0, evidenceRetentionDays: 0 },
+    privacy: {
+      mode: 'managed',
+      searchableByServer: false,
+      appsMayReadContent: false,
+      deletedContentRecoveryDays: 0,
+      evidenceRetentionDays: 0,
+    },
     participants: [],
   },
 ];
@@ -71,7 +113,7 @@ describe('ChannelSidebar', () => {
         onSelectChannel={() => {}}
         mutedChannelIds={new Set(['chan-2'])}
         onToggleMute={() => {}}
-      />
+      />,
     );
 
     expect(screen.getByText('TEXT CHANNELS')).toBeInTheDocument();
@@ -92,7 +134,7 @@ describe('ChannelSidebar', () => {
         onSelectChannel={onSelectChannel}
         mutedChannelIds={new Set()}
         onToggleMute={() => {}}
-      />
+      />,
     );
 
     const voiceBtn = screen.getByRole('button', { name: /^Voice Lounge/ });
@@ -112,7 +154,7 @@ describe('ChannelSidebar', () => {
         onSelectChannel={() => {}}
         mutedChannelIds={new Set()}
         onToggleMute={onToggleMute}
-      />
+      />,
     );
 
     const muteBtn = screen.getByRole('button', { name: 'Mute general' });
@@ -134,7 +176,7 @@ describe('ChannelSidebar', () => {
         mutedChannelIds={new Set()}
         onToggleMute={() => {}}
         channelScreenShares={screenShares}
-      />
+      />,
     );
 
     expect(screen.getByText('Alice Smith')).toBeInTheDocument();
@@ -153,7 +195,7 @@ describe('ChannelSidebar', () => {
         onSelectChannel={() => {}}
         mutedChannelIds={new Set()}
         onToggleMute={() => {}}
-      />
+      />,
     );
 
     expect(screen.getByText('stage-backstage')).toBeInTheDocument();
@@ -173,7 +215,7 @@ describe('ChannelSidebar', () => {
         onToggleMute={() => {}}
         onMouseEnterChannel={onMouseEnterChannel}
         onMouseLeaveChannel={onMouseLeaveChannel}
-      />
+      />,
     );
 
     const generalBtn = screen.getByRole('button', { name: 'general' });

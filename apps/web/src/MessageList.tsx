@@ -32,10 +32,7 @@ export function MessageList({
         const previous = messages[index - 1];
         const grouped = previous?.author.id === message.author.id;
         return (
-          <article
-            className={`message ${grouped ? 'message--grouped' : ''}`}
-            key={message.id}
-          >
+          <article className={`message ${grouped ? 'message--grouped' : ''}`} key={message.id}>
             {grouped ? (
               <time>{timeLabel(message.createdAt)}</time>
             ) : (
@@ -48,9 +45,7 @@ export function MessageList({
                   <time>{timeLabel(message.createdAt)}</time>
                 </header>
               )}
-              <p>
-                {message.availability === 'deleted' ? 'Message deleted' : message.content}
-              </p>
+              <p>{message.availability === 'deleted' ? 'Message deleted' : message.content}</p>
               {message.reactions.length > 0 && (
                 <div className="reactions">
                   {message.reactions.map((reaction) => (
@@ -58,9 +53,7 @@ export function MessageList({
                       className={reaction.reacted ? 'is-reacted' : ''}
                       key={reaction.emoji}
                       type="button"
-                      onClick={() =>
-                        onReact(message.id, reaction.emoji, reaction.reacted)
-                      }
+                      onClick={() => onReact(message.id, reaction.emoji, reaction.reacted)}
                     >
                       {reaction.emoji} <span>{reaction.count}</span>
                     </button>
@@ -93,10 +86,7 @@ export function MessageList({
               >
                 <Smile size={15} />
               </IconButton>
-              <IconButton
-                label="Reply"
-                onClick={() => onReply(message.id, message.content)}
-              >
+              <IconButton label="Reply" onClick={() => onReply(message.id, message.content)}>
                 <MessageSquareText size={15} />
               </IconButton>
               <IconButton label="More actions">

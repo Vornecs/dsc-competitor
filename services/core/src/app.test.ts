@@ -1359,7 +1359,11 @@ describe('custom server emoji', () => {
     return { body, contentType: `multipart/form-data; boundary=${boundary}` };
   }
 
-  async function upload(app: Awaited<ReturnType<typeof buildApp>>, token: string, communityId: string) {
+  async function upload(
+    app: Awaited<ReturnType<typeof buildApp>>,
+    token: string,
+    communityId: string,
+  ) {
     const multipart = multipartEmoji('party_blob');
     return app.inject({
       method: 'POST',
@@ -2023,7 +2027,7 @@ describe('managed message lifecycle', () => {
       },
     });
     expect(replyRes.statusCode).toBe(201);
-    
+
     const replyData = replyRes.json();
     expect(replyData.replyToId).toBe(parentId);
     expect(replyData.replyPreview).toMatchObject({
@@ -2596,7 +2600,10 @@ describe('operator audit log', () => {
     const unguardedApp = await buildApp();
     apps.push(unguardedApp);
 
-    const unguardedBackup = await unguardedApp.inject({ method: 'POST', url: '/v1/operator/backup' });
+    const unguardedBackup = await unguardedApp.inject({
+      method: 'POST',
+      url: '/v1/operator/backup',
+    });
     expect(unguardedBackup.statusCode).toBe(200);
 
     const unguardedRestore = await unguardedApp.inject({

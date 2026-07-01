@@ -86,7 +86,7 @@ describe('MessageList', () => {
         onReply={onReply}
         onEmojiPickerOpen={onEmojiPickerOpen}
         emojiPickerMessageId={null}
-      />
+      />,
     );
 
     // Displays content for visible messages
@@ -115,7 +115,7 @@ describe('MessageList', () => {
         onReply={onReply}
         onEmojiPickerOpen={onEmojiPickerOpen}
         emojiPickerMessageId={null}
-      />
+      />,
     );
 
     const articles = container.querySelectorAll('article.message');
@@ -148,7 +148,7 @@ describe('MessageList', () => {
         onReply={onReply}
         onEmojiPickerOpen={onEmojiPickerOpen}
         emojiPickerMessageId={null}
-      />
+      />,
     );
 
     const reactionBtn = screen.getByRole('button', { name: '👍 2' });
@@ -173,7 +173,7 @@ describe('MessageList', () => {
         onReply={onReply}
         onEmojiPickerOpen={onEmojiPickerOpen}
         emojiPickerMessageId={null}
-      />
+      />,
     );
 
     // Find and click the react action button on msg-1
@@ -190,7 +190,7 @@ describe('MessageList', () => {
         onReply={onReply}
         onEmojiPickerOpen={onEmojiPickerOpen}
         emojiPickerMessageId="msg-1"
-      />
+      />,
     );
 
     const picker = screen.getByRole('dialog', { name: 'Pick a reaction' });
@@ -217,7 +217,7 @@ describe('MessageList', () => {
         onReply={onReply}
         onEmojiPickerOpen={onEmojiPickerOpen}
         emojiPickerMessageId={null}
-      />
+      />,
     );
 
     const replyButtons = screen.getAllByRole('button', { name: 'Reply' });

@@ -5,6 +5,7 @@
 **Claude** is the lead/orchestrator on this project. All architectural decisions, integration of parallel work, prioritization, and cross-cutting changes run through Claude. Codex and Antigravity are implementers for well-scoped, parallel tasks that Claude assigns.
 
 **Before starting any task:**
+
 1. Check `WORKLOG.md` — if the file you need to touch is listed under "Hot files", coordinate first
 2. Find your assignment under your agent name in WORKLOG.md; if none exists, check the P4 queue for safe opportunistic tasks
 3. Do not touch files outside the scope you were assigned
@@ -12,6 +13,7 @@
 5. The `status/` directory is always safe to write to; read `status/README.md` for the format
 
 **Lead responsibilities (Claude):**
+
 - Owns `App.tsx`, `index.ts`, `protocol.ts`, and `PRODUCT_PLAN.md`
 - Makes all schema changes
 - Decides what gets merged and when
@@ -37,6 +39,7 @@
 **Never close a cycle with fewer than 3 queued tasks per active agent or fewer than 6 P4 tasks.**
 
 When drafting new tasks for agent queues, prefer:
+
 - Backend tasks for Codex: new endpoints, middleware, persistence, rate limiting, pagination, tests
 - Frontend component tasks for Antigravity: new `.tsx` files only (no App.tsx edits), CSS additions, unit tests for pure functions
 - Analysis/audit tasks for P4: read-only scans, reports written to `status/<name>.md`
@@ -44,6 +47,7 @@ When drafting new tasks for agent queues, prefer:
 ---
 
 ## Stack at a glance
+
 - **Frontend**: React 19, Vite, TypeScript — single entry `apps/web/src/App.tsx`
 - **Backend**: Fastify, Node 24+ — `services/core/src/app.ts` (routes) + `index.ts` (bootstrap)
 - **Shared types**: `packages/contracts/src/protocol.ts` (Zod schemas)
@@ -51,6 +55,7 @@ When drafting new tasks for agent queues, prefer:
 - **Storage**: in-memory default; PostgreSQL via `DATABASE_URL`; Redis via `REDIS_URL`
 
 ## Run locally
+
 ```bash
 npm install
 npm run dev   # core on :8790, web on :5173
@@ -59,6 +64,7 @@ npm run dev   # core on :8790, web on :5173
 Set env vars in `services/core/.env` (copy `.env.example`).
 
 ## The #1 trap: in-memory storage wipes on restart
+
 Without `DATABASE_URL`, ALL state (users, messages, communities) lives in RAM and is gone on restart.
 Set `SNAPSHOT_FILE=.cove-data.json` in `.env` for local dev persistence, or set a real `DATABASE_URL`.
 
@@ -83,13 +89,16 @@ If any of these is missing, the feature is still in progress.
 ---
 
 ## Error handling rules (non-negotiable)
+
 - **Never** swallow errors silently in user-triggered actions
 - **Never** set global connection state to `'preview'` because one API call failed
 - Always show a toast (`showToast()` in App.tsx) for recoverable errors
 - WebSocket close → reconnect with exponential backoff (already wired — don't change this)
 
 ## History of silent failures (do not repeat)
+
 Identified 2026-06-30 — all now fixed, listed here to prevent regression:
+
 - Community rail buttons: rendered but no `onClick`
 - Reaction buttons: rendered but no `onClick`
 - Reply button: no state, no handler, no API call
@@ -100,14 +109,16 @@ Identified 2026-06-30 — all now fixed, listed here to prevent regression:
 ---
 
 ## Persistence quick reference
-| Scenario | Setup |
-|----------|-------|
-| Tests / zero-config | In-memory (automatic) |
+
+| Scenario                   | Setup                                     |
+| -------------------------- | ----------------------------------------- |
+| Tests / zero-config        | In-memory (automatic)                     |
 | Local dev with persistence | `SNAPSHOT_FILE=.cove-data.json` in `.env` |
-| Staging / Production | `DATABASE_URL=postgres://...` |
-| Multi-node | `DATABASE_URL` + `REDIS_URL` |
+| Staging / Production       | `DATABASE_URL=postgres://...`             |
+| Multi-node                 | `DATABASE_URL` + `REDIS_URL`              |
 
 ## Adding new features
+
 1. Schema change in `packages/contracts/src/protocol.ts` if needed (Claude owns this)
 2. Backend route in `services/core/src/app.ts`
 3. Test in `services/core/src/app.test.ts`

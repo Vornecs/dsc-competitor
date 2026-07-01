@@ -405,7 +405,10 @@ export function App() {
       if (!res.ok) return;
       const data = (await res.json()) as { items: Message[] };
       if (!Array.isArray(data?.items)) return;
-      const parsed = data.items.map((m) => messageSchema.safeParse(m)).filter((r) => r.success).map((r) => r.data!);
+      const parsed = data.items
+        .map((m) => messageSchema.safeParse(m))
+        .filter((r) => r.success)
+        .map((r) => r.data!);
       setMessages((current) => {
         const others = current.filter((m) => m.channelId !== channelId);
         return [...others, ...parsed];
@@ -415,18 +418,26 @@ export function App() {
     }
   }
 
-  async function toggleReaction(messageId: string, channelId: string, emoji: string, reacted: boolean) {
+  async function toggleReaction(
+    messageId: string,
+    channelId: string,
+    emoji: string,
+    reacted: boolean,
+  ) {
     if (!sessionToken) {
       showToast('Sign in to react to messages');
       return;
     }
     const method = reacted ? 'DELETE' : 'PUT';
     try {
-      const res = await fetch(`${API_BASE}/v1/channels/${channelId}/messages/${messageId}/reactions`, {
-        method,
-        headers: { 'content-type': 'application/json', authorization: `Bearer ${sessionToken}` },
-        body: JSON.stringify({ emoji }),
-      });
+      const res = await fetch(
+        `${API_BASE}/v1/channels/${channelId}/messages/${messageId}/reactions`,
+        {
+          method,
+          headers: { 'content-type': 'application/json', authorization: `Bearer ${sessionToken}` },
+          body: JSON.stringify({ emoji }),
+        },
+      );
       if (!res.ok) throw new Error('Reaction rejected');
     } catch {
       showToast('Failed to update reaction');
@@ -450,7 +461,11 @@ export function App() {
 
   async function handleCreateCommunity() {
     if (!newCommunityName.trim()) return;
-    if (!sessionToken) { setShowSpaceModal(false); setShowLoginModal(true); return; }
+    if (!sessionToken) {
+      setShowSpaceModal(false);
+      setShowLoginModal(true);
+      return;
+    }
     setSpaceModalLoading(true);
     try {
       const res = await fetch(`${API_BASE}/v1/communities`, {
@@ -478,7 +493,11 @@ export function App() {
 
   async function handleJoinByInvite() {
     if (!joinInviteCode.trim()) return;
-    if (!sessionToken) { setShowSpaceModal(false); setShowLoginModal(true); return; }
+    if (!sessionToken) {
+      setShowSpaceModal(false);
+      setShowLoginModal(true);
+      return;
+    }
     setSpaceModalLoading(true);
     try {
       const res = await fetch(
@@ -718,7 +737,8 @@ export function App() {
   }, [sessionToken]);
 
   useEffect(() => {
-    if (import.meta.env.MODE === 'test' || typeof WebSocket === 'undefined' || !sessionToken) return;
+    if (import.meta.env.MODE === 'test' || typeof WebSocket === 'undefined' || !sessionToken)
+      return;
     const url = `${runtimeConfig.gatewayUrl}?token=${encodeURIComponent(sessionToken)}`;
     const socket = new WebSocket(url);
     let heartbeat: number | undefined;
@@ -1468,7 +1488,10 @@ export function App() {
         <IconButton
           label="Create or join a space"
           className="space-add"
-          onClick={() => { setSpaceModalTab('create'); setShowSpaceModal(true); }}
+          onClick={() => {
+            setSpaceModalTab('create');
+            setShowSpaceModal(true);
+          }}
         >
           <Plus size={20} />
         </IconButton>
@@ -2139,7 +2162,9 @@ export function App() {
           role="dialog"
           aria-modal="true"
           aria-label="Create or join a space"
-          onClick={(e) => { if (e.target === e.currentTarget) setShowSpaceModal(false); }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setShowSpaceModal(false);
+          }}
         >
           <div className="login-modal">
             <h2 style={{ margin: '0 0 4px', fontSize: '18px' }}>
@@ -2150,26 +2175,54 @@ export function App() {
                 type="button"
                 onClick={() => setSpaceModalTab('create')}
                 style={{
-                  flex: 1, padding: '7px', border: 0, borderRadius: '6px', cursor: 'pointer',
-                  background: spaceModalTab === 'create' ? 'var(--accent)' : 'var(--surface-raised)',
+                  flex: 1,
+                  padding: '7px',
+                  border: 0,
+                  borderRadius: '6px',
+                  cursor: 'pointer',
+                  background:
+                    spaceModalTab === 'create' ? 'var(--accent)' : 'var(--surface-raised)',
                   color: spaceModalTab === 'create' ? '#fff' : 'var(--text-muted)',
-                  fontWeight: 600, fontSize: '13px',
+                  fontWeight: 600,
+                  fontSize: '13px',
                 }}
-              >Create</button>
+              >
+                Create
+              </button>
               <button
                 type="button"
                 onClick={() => setSpaceModalTab('join')}
                 style={{
-                  flex: 1, padding: '7px', border: 0, borderRadius: '6px', cursor: 'pointer',
+                  flex: 1,
+                  padding: '7px',
+                  border: 0,
+                  borderRadius: '6px',
+                  cursor: 'pointer',
                   background: spaceModalTab === 'join' ? 'var(--accent)' : 'var(--surface-raised)',
                   color: spaceModalTab === 'join' ? '#fff' : 'var(--text-muted)',
-                  fontWeight: 600, fontSize: '13px',
+                  fontWeight: 600,
+                  fontSize: '13px',
                 }}
-              >Join</button>
+              >
+                Join
+              </button>
             </div>
             {spaceModalTab === 'create' ? (
-              <form onSubmit={(e) => { e.preventDefault(); void handleCreateCommunity(); }}>
-                <label style={{ display: 'block', marginBottom: '6px', fontSize: '12px', fontWeight: 600, color: 'var(--text-muted)' }}>
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void handleCreateCommunity();
+                }}
+              >
+                <label
+                  style={{
+                    display: 'block',
+                    marginBottom: '6px',
+                    fontSize: '12px',
+                    fontWeight: 600,
+                    color: 'var(--text-muted)',
+                  }}
+                >
                   SPACE NAME
                 </label>
                 <input
@@ -2179,24 +2232,68 @@ export function App() {
                   value={newCommunityName}
                   onChange={(e) => setNewCommunityName(e.target.value)}
                   maxLength={80}
-                  style={{ width: '100%', boxSizing: 'border-box', padding: '10px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)', fontSize: '14px', marginBottom: '16px' }}
+                  style={{
+                    width: '100%',
+                    boxSizing: 'border-box',
+                    padding: '10px',
+                    borderRadius: '6px',
+                    border: '1px solid var(--border)',
+                    background: 'var(--surface)',
+                    color: 'var(--text)',
+                    fontSize: '14px',
+                    marginBottom: '16px',
+                  }}
                 />
                 <div style={{ display: 'flex', gap: '8px' }}>
                   <button
                     type="submit"
                     disabled={spaceModalLoading || !newCommunityName.trim()}
-                    style={{ flex: 1, padding: '10px', border: 0, borderRadius: '6px', background: 'var(--accent)', color: '#fff', fontWeight: 600, cursor: 'pointer', opacity: spaceModalLoading || !newCommunityName.trim() ? 0.6 : 1 }}
-                  >{spaceModalLoading ? 'Creating…' : 'Create Space'}</button>
+                    style={{
+                      flex: 1,
+                      padding: '10px',
+                      border: 0,
+                      borderRadius: '6px',
+                      background: 'var(--accent)',
+                      color: '#fff',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      opacity: spaceModalLoading || !newCommunityName.trim() ? 0.6 : 1,
+                    }}
+                  >
+                    {spaceModalLoading ? 'Creating…' : 'Create Space'}
+                  </button>
                   <button
                     type="button"
                     onClick={() => setShowSpaceModal(false)}
-                    style={{ padding: '10px 16px', border: '1px solid var(--border)', borderRadius: '6px', background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer' }}
-                  >Cancel</button>
+                    style={{
+                      padding: '10px 16px',
+                      border: '1px solid var(--border)',
+                      borderRadius: '6px',
+                      background: 'transparent',
+                      color: 'var(--text-muted)',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Cancel
+                  </button>
                 </div>
               </form>
             ) : (
-              <form onSubmit={(e) => { e.preventDefault(); void handleJoinByInvite(); }}>
-                <label style={{ display: 'block', marginBottom: '6px', fontSize: '12px', fontWeight: 600, color: 'var(--text-muted)' }}>
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void handleJoinByInvite();
+                }}
+              >
+                <label
+                  style={{
+                    display: 'block',
+                    marginBottom: '6px',
+                    fontSize: '12px',
+                    fontWeight: 600,
+                    color: 'var(--text-muted)',
+                  }}
+                >
                   INVITE CODE OR LINK
                 </label>
                 <input
@@ -2205,19 +2302,50 @@ export function App() {
                   placeholder="abc123"
                   value={joinInviteCode}
                   onChange={(e) => setJoinInviteCode(e.target.value)}
-                  style={{ width: '100%', boxSizing: 'border-box', padding: '10px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)', fontSize: '14px', marginBottom: '16px' }}
+                  style={{
+                    width: '100%',
+                    boxSizing: 'border-box',
+                    padding: '10px',
+                    borderRadius: '6px',
+                    border: '1px solid var(--border)',
+                    background: 'var(--surface)',
+                    color: 'var(--text)',
+                    fontSize: '14px',
+                    marginBottom: '16px',
+                  }}
                 />
                 <div style={{ display: 'flex', gap: '8px' }}>
                   <button
                     type="submit"
                     disabled={spaceModalLoading || !joinInviteCode.trim()}
-                    style={{ flex: 1, padding: '10px', border: 0, borderRadius: '6px', background: 'var(--accent)', color: '#fff', fontWeight: 600, cursor: 'pointer', opacity: spaceModalLoading || !joinInviteCode.trim() ? 0.6 : 1 }}
-                  >{spaceModalLoading ? 'Joining…' : 'Join Space'}</button>
+                    style={{
+                      flex: 1,
+                      padding: '10px',
+                      border: 0,
+                      borderRadius: '6px',
+                      background: 'var(--accent)',
+                      color: '#fff',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      opacity: spaceModalLoading || !joinInviteCode.trim() ? 0.6 : 1,
+                    }}
+                  >
+                    {spaceModalLoading ? 'Joining…' : 'Join Space'}
+                  </button>
                   <button
                     type="button"
                     onClick={() => setShowSpaceModal(false)}
-                    style={{ padding: '10px 16px', border: '1px solid var(--border)', borderRadius: '6px', background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer' }}
-                  >Cancel</button>
+                    style={{
+                      padding: '10px 16px',
+                      border: '1px solid var(--border)',
+                      borderRadius: '6px',
+                      background: 'transparent',
+                      color: 'var(--text-muted)',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Cancel
+                  </button>
                 </div>
               </form>
             )}

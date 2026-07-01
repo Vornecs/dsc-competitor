@@ -12,13 +12,7 @@ export function Skeleton({ width, height, className = '' }: SkeletonProps) {
     ...(height ? { height } : {}),
   };
 
-  return (
-    <div
-      className={`skeleton ${className}`}
-      style={style}
-      data-testid="skeleton"
-    />
-  );
+  return <div className={`skeleton ${className}`} style={style} data-testid="skeleton" />;
 }
 
 export default Skeleton;

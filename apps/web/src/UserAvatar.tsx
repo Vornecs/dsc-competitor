@@ -35,10 +35,7 @@ export function UserAvatar({ src, name, size = 'md', status }: UserAvatarProps) 
       {src ? (
         <img src={src} alt={name} className="user-avatar-image" />
       ) : (
-        <div
-          className="user-avatar-placeholder"
-          style={{ backgroundColor: avatarColor }}
-        >
+        <div className="user-avatar-placeholder" style={{ backgroundColor: avatarColor }}>
           {firstLetter}
         </div>
       )}
