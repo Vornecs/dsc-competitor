@@ -370,6 +370,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
   const serverEmojiStorageKeys = new Map<string, { storageKey: string; mimeType: string }>();
   const mutedChannelIdsByAccount = new Map<string, Set<string>>();
   const pinnedMessageIdsByChannel = new Map<string, string[]>();
+  const attentionItemsByAccount = new Map<string, AttentionItem[]>();
 
   // Seed demo messages into repository
   for (const msg of structuredClone(demoBootstrap.messages)) {
@@ -677,6 +678,74 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
       .send({ channelIds: Array.from(mutedChannelIdsByAccount.get(account.id) ?? []) });
   });
 
+  app.get('/v1/accounts/me/attention', async (request, reply) => {
+    const ok = await requireAuth(request, reply);
+    if (!ok) return;
+    const { account } = (request as any).user as { account: Account };
+    return reply.code(200).send({ items: attentionItemsByAccount.get(account.id) ?? [] });
+  });
+
+  app.post<{ Params: { attentionId: string } }>(
+    '/v1/accounts/me/attention/:attentionId/read',
+    async (request, reply) => {
+      const ok = await requireAuth(request, reply);
+      if (!ok) return;
+      const { account } = (request as any).user as { account: Account };
+      const items = attentionItemsByAccount.get(account.id) ?? [];
+      const item = items.find((candidate) => candidate.id === request.params.attentionId);
+      if (!item) {
+        return problem(
+          reply,
+          404,
+          'Attention item not found',
+          'The requested attention item does not exist.',
+          request.url,
+        );
+      }
+      const updated = attentionItemSchema.parse({ ...item, unread: false });
+      attentionItemsByAccount.set(
+        account.id,
+        items.map((candidate) => (candidate.id === updated.id ? updated : candidate)),
+      );
+      return reply.code(200).send(updated);
+    },
+  );
+
+  app.post<{ Params: { attentionId: string } }>(
+    '/v1/accounts/me/attention/:attentionId/dismiss',
+    async (request, reply) => {
+      const ok = await requireAuth(request, reply);
+      if (!ok) return;
+      const { account } = (request as any).user as { account: Account };
+      const items = attentionItemsByAccount.get(account.id) ?? [];
+      if (!items.some((candidate) => candidate.id === request.params.attentionId)) {
+        return problem(
+          reply,
+          404,
+          'Attention item not found',
+          'The requested attention item does not exist.',
+          request.url,
+        );
+      }
+      attentionItemsByAccount.set(
+        account.id,
+        items.filter((candidate) => candidate.id !== request.params.attentionId),
+      );
+      return reply.code(204).send();
+    },
+  );
+
+  app.post('/v1/accounts/me/attention/read-all', async (request, reply) => {
+    const ok = await requireAuth(request, reply);
+    if (!ok) return;
+    const { account } = (request as any).user as { account: Account };
+    const items = (attentionItemsByAccount.get(account.id) ?? []).map((item) =>
+      attentionItemSchema.parse({ ...item, unread: false }),
+    );
+    attentionItemsByAccount.set(account.id, items);
+    return reply.code(200).send({ items });
+  });
+
   app.get('/v1/bootstrap', async (request, reply) => {
     const authHeader = request.headers['authorization'];
     if (authHeader && authHeader.startsWith('Bearer ')) {
@@ -721,7 +790,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
             activeChannelId,
             channels,
             messages,
-            attention: [],
+            attention: attentionItemsByAccount.get(account.id) ?? [],
           });
         }
       }
@@ -1326,6 +1395,14 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
           channelId: channel.id,
           messageId: message.id,
         });
+        const currentAttention = attentionItemsByAccount.get(replyRecipientId) ?? [];
+        attentionItemsByAccount.set(
+          replyRecipientId,
+          [
+            attentionItem,
+            ...currentAttention.filter((item) => item.id !== attentionItem.id),
+          ].slice(0, 100),
+        );
         await hub.publish(
           'attention.item.created',
           attentionItem,
