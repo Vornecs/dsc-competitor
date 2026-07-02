@@ -1,18 +1,22 @@
 ## Status — Codex — 2026-07-01
 
-**Task completed:** Codex-5 server-side channel mute persistence
+**Task completed:** Codex-9 — server-side attention persistence
 
 **Files changed:**
 
-- `services/core/src/app.ts` — added authenticated POST/GET muted-channel endpoints backed by an account-scoped in-memory map
-- `services/core/src/app.test.ts` — added persistence and authentication integration tests
+- `services/core/src/app.ts` — persisted reply attention per account, added list/read/dismiss/read-all endpoints, capped items at 100, and returned them from authenticated bootstrap
+- `services/core/src/app.test.ts` — added read, dismiss, read-all, bootstrap, ordering, and 100-item cap coverage
 
 **Health checks:**
 
 - `npm run typecheck`: PASSED (5 workspaces)
-- `npm test`: PASSED (174 tests: 14 desktop, 50 web, 86 core, 24 contracts)
+- `npm test`: PASSED (207 tests: 14 desktop, 75 web, 94 core, 24 contracts)
+- `prettier --check` (changed source files): PASSED
+- `git diff --check`: PASSED
 
 **Notes / flags for orchestrator:**
 
-- The scoped changes were included by concurrent commit `3295634` while Codex was preparing an isolated commit; no duplicate commit was created.
-- No contract schema or WORKLOG changes were made by Codex.
+- No contract schema changes were needed.
+- Attention state is account-scoped in memory and capped at 100 items as assigned.
+- Claude must wire `App.tsx` mark-read, dismiss, read-all, and bootstrap refresh behavior to the new endpoints.
+- Unrelated Antigravity/frontend worktree changes were preserved.

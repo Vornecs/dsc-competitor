@@ -89,6 +89,29 @@ describe('core HTTP API', () => {
     expect(messageSchema.parse(created.json()).id).toBe(messageSchema.parse(replayed.json()).id);
   });
 
+  it('rate limits rapid message bursts', async () => {
+    const app = await buildApp();
+    apps.push(app);
+
+    const responses = [];
+    for (let index = 0; index < 11; index += 1) {
+      responses.push(
+        await app.inject({
+          method: 'POST',
+          url: '/v1/channels/channel-campfire/messages',
+          headers: { 'idempotency-key': `rate-limit-message-${index}` },
+          payload: { content: `Message ${index}`, clientNonce: `rate-limit-nonce-${index}` },
+        }),
+      );
+    }
+
+    expect(responses.slice(0, 10).map((response) => response.statusCode)).toEqual(
+      Array(10).fill(201),
+    );
+    expect(responses[10]!.statusCode).toBe(429);
+    expect(responses[10]!.headers['retry-after']).toBeDefined();
+  });
+
   it('paginates channel messages newest-first from a message cursor', async () => {
     const repo = createMemoryRepository();
     const messages = Array.from({ length: 5 }, (_, index) =>
@@ -1423,7 +1446,8 @@ describe('custom server emoji', () => {
       headers: { authorization: `Bearer ${token}` },
     });
     expect(content.statusCode).toBe(200);
-    expect(content.headers['content-type']).toMatch(/^image\//);
+    expect(content.headers['content-type']).toBe('image/png');
+    expect(content.rawPayload).toEqual(Buffer.from('png-bytes'));
   });
 });
 
@@ -1598,7 +1622,7 @@ describe('attachment pipeline', () => {
 
 describe('managed message lifecycle', () => {
   async function authenticate(app: Awaited<ReturnType<typeof buildApp>>) {
-    const email = `lifecycle-${crypto.randomUUID()}@test.cove.chat`;
+    const email = `lifecycle-${crypto.randomUUID().slice(0, 8)}@test.cove.chat`;
     const send = await app.inject({
       method: 'POST',
       url: '/v1/auth/email/send-code',
@@ -1656,6 +1680,31 @@ describe('managed message lifecycle', () => {
     });
   }
 
+  async function createReplyAttention(
+    app: Awaited<ReturnType<typeof buildApp>>,
+    channelId: string,
+    recipientToken: string,
+    senderToken: string,
+    content: string,
+    remoteAddress?: string,
+  ) {
+    const parent = await sendMessage(app, channelId, recipientToken, `Parent for ${content}`);
+    return app.inject({
+      method: 'POST',
+      url: `/v1/channels/${channelId}/messages`,
+      headers: {
+        authorization: `Bearer ${senderToken}`,
+        'idempotency-key': `attention-${crypto.randomUUID()}`,
+      },
+      payload: {
+        content,
+        clientNonce: `nonce-${crypto.randomUUID()}`,
+        replyToId: parent.json().id,
+      },
+      ...(remoteAddress ? { remoteAddress } : {}),
+    });
+  }
+
   it('allows author edits, moderator deletes, and exposes content-free audit events', async () => {
     const app = await buildApp();
     apps.push(app);
@@ -1706,6 +1755,198 @@ describe('managed message lifecycle', () => {
     expect(auditActions).toContain('message.deleted');
     expect(auditActions).toContain('message.edited');
     expect(JSON.stringify(ownerAudit.json())).not.toContain('private wording');
+  });
+
+  it('pins a message with message.manage permission', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const { owner, member, channelId } = await setup(app);
+    const created = await sendMessage(app, channelId, member.token, 'Pin this message');
+    const messageId = created.json().id as string;
+
+    const denied = await app.inject({
+      method: 'POST',
+      url: `/v1/channels/${channelId}/messages/${messageId}/pin`,
+      headers: { authorization: `Bearer ${member.token}` },
+    });
+    expect(denied.statusCode).toBe(403);
+
+    const pinned = await app.inject({
+      method: 'POST',
+      url: `/v1/channels/${channelId}/messages/${messageId}/pin`,
+      headers: { authorization: `Bearer ${owner.token}` },
+    });
+    expect(pinned.statusCode).toBe(200);
+    expect(pinned.json()).toMatchObject({ id: messageId, content: 'Pin this message' });
+  });
+
+  it('unpins a message with message.manage permission', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const { owner, channelId } = await setup(app);
+    const created = await sendMessage(app, channelId, owner.token, 'Remove this pin');
+    const messageId = created.json().id as string;
+
+    await app.inject({
+      method: 'POST',
+      url: `/v1/channels/${channelId}/messages/${messageId}/pin`,
+      headers: { authorization: `Bearer ${owner.token}` },
+    });
+    const unpinned = await app.inject({
+      method: 'DELETE',
+      url: `/v1/channels/${channelId}/messages/${messageId}/pin`,
+      headers: { authorization: `Bearer ${owner.token}` },
+    });
+    expect(unpinned.statusCode).toBe(204);
+
+    const listed = await app.inject({
+      method: 'GET',
+      url: `/v1/channels/${channelId}/pinned`,
+      headers: { authorization: `Bearer ${owner.token}` },
+    });
+    expect(listed.json()).toEqual({ items: [] });
+  });
+
+  it('lists pinned messages newest-first', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const { owner, member, channelId } = await setup(app);
+    const first = await sendMessage(app, channelId, owner.token, 'First pin');
+    const second = await sendMessage(app, channelId, owner.token, 'Second pin');
+
+    for (const messageId of [first.json().id, second.json().id]) {
+      const response = await app.inject({
+        method: 'POST',
+        url: `/v1/channels/${channelId}/messages/${messageId}/pin`,
+        headers: { authorization: `Bearer ${owner.token}` },
+      });
+      expect(response.statusCode).toBe(200);
+    }
+
+    const listed = await app.inject({
+      method: 'GET',
+      url: `/v1/channels/${channelId}/pinned`,
+      headers: { authorization: `Bearer ${member.token}` },
+    });
+    expect(listed.statusCode).toBe(200);
+    expect(listed.json().items.map((message: { id: string }) => message.id)).toEqual([
+      second.json().id,
+      first.json().id,
+    ]);
+  });
+
+  it('marks an attention item read and returns it from bootstrap', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const { owner, member, channelId } = await setup(app);
+    const reply = await createReplyAttention(
+      app,
+      channelId,
+      owner.token,
+      member.token,
+      'Read this attention item',
+    );
+    const attentionId = `reply-${reply.json().id}`;
+
+    const read = await app.inject({
+      method: 'POST',
+      url: `/v1/accounts/me/attention/${attentionId}/read`,
+      headers: { authorization: `Bearer ${owner.token}` },
+    });
+    expect(read.statusCode).toBe(200);
+    expect(read.json()).toMatchObject({ id: attentionId, unread: false });
+
+    const bootstrap = await app.inject({
+      method: 'GET',
+      url: '/v1/bootstrap',
+      headers: { authorization: `Bearer ${owner.token}` },
+    });
+    expect(bootstrap.statusCode, bootstrap.body).toBe(200);
+    expect(bootstrap.json().attention).toEqual([
+      expect.objectContaining({ id: attentionId, unread: false }),
+    ]);
+  });
+
+  it('dismisses an attention item', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const { owner, member, channelId } = await setup(app);
+    const reply = await createReplyAttention(
+      app,
+      channelId,
+      owner.token,
+      member.token,
+      'Dismiss this attention item',
+    );
+    const attentionId = `reply-${reply.json().id}`;
+
+    const dismissed = await app.inject({
+      method: 'POST',
+      url: `/v1/accounts/me/attention/${attentionId}/dismiss`,
+      headers: { authorization: `Bearer ${owner.token}` },
+    });
+    expect(dismissed.statusCode).toBe(204);
+
+    const listed = await app.inject({
+      method: 'GET',
+      url: '/v1/accounts/me/attention',
+      headers: { authorization: `Bearer ${owner.token}` },
+    });
+    expect(listed.json()).toEqual({ items: [] });
+  });
+
+  it('marks all attention items read', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const { owner, member, channelId } = await setup(app);
+    await createReplyAttention(app, channelId, owner.token, member.token, 'First unread item');
+    await createReplyAttention(app, channelId, owner.token, member.token, 'Second unread item');
+
+    const readAll = await app.inject({
+      method: 'POST',
+      url: '/v1/accounts/me/attention/read-all',
+      headers: { authorization: `Bearer ${owner.token}` },
+    });
+    expect(readAll.statusCode).toBe(200);
+    expect(readAll.json().items).toHaveLength(2);
+    expect(readAll.json().items.every((item: { unread: boolean }) => !item.unread)).toBe(true);
+  });
+
+  it('caps attention items at 100 with the most recent first', async () => {
+    const app = await buildApp();
+    apps.push(app);
+    const { owner, member, channelId } = await setup(app);
+    const parent = await sendMessage(app, channelId, owner.token, 'Attention cap parent');
+    const replyIds: string[] = [];
+
+    for (let index = 0; index < 101; index += 1) {
+      const reply = await app.inject({
+        method: 'POST',
+        url: `/v1/channels/${channelId}/messages`,
+        headers: {
+          authorization: `Bearer ${member.token}`,
+          'idempotency-key': `attention-cap-${index}`,
+        },
+        remoteAddress: `10.0.0.${index + 1}`,
+        payload: {
+          content: `Attention item ${index}`,
+          clientNonce: `attention-cap-nonce-${index}`,
+          replyToId: parent.json().id,
+        },
+      });
+      expect(reply.statusCode).toBe(201);
+      replyIds.push(`reply-${reply.json().id}`);
+    }
+
+    const listed = await app.inject({
+      method: 'GET',
+      url: '/v1/accounts/me/attention',
+      headers: { authorization: `Bearer ${owner.token}` },
+    });
+    expect(listed.statusCode).toBe(200);
+    expect(listed.json().items).toHaveLength(100);
+    expect(listed.json().items[0].id).toBe(replyIds[100]);
+    expect(listed.json().items.at(-1).id).toBe(replyIds[1]);
   });
 
   it('makes reactions idempotent, permission-gated, and removable', async () => {

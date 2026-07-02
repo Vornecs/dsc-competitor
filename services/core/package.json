@@ -16,6 +16,7 @@
     "@cove/contracts": "0.0.0",
     "@fastify/cors": "latest",
     "@fastify/helmet": "latest",
+    "@fastify/rate-limit": "11.1.0",
     "@fastify/websocket": "latest",
     "fastify": "latest",
     "livekit-server-sdk": "2.16.0",

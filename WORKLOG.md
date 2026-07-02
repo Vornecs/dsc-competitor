@@ -1,7 +1,19 @@
 # Cove — Work Log
 
 > Maintained by Claude (lead/orchestrator). Updated each work cycle.  
-> Last updated: 2026-07-01 | Current cycle: 34
+> Last updated: 2026-07-01 (orchestration sync pass) | Current cycle: 34
+
+---
+
+## Orchestration sync note — 2026-07-01 (second pass, post-merge)
+
+- **PR #2 ("Cycles 32-34: friends-first pivot, landing page, P0 bug fixes, backend features") was merged to `main` by the operator** at 07:37 (commit `fa66ce1`). Local `main` fast-forwarded 32 commits to match; the `pr/phase1-cycles-16-20` branch's work is now fully on `main`.
+- **Health re-verified post-merge:** `npm run typecheck` clean across all 5 workspaces; `npm test` green — 174/174 tests (86 core + 50 web + 24 contracts + 14 desktop).
+- **No new agent status updates since the last reconciliation** — `status/Codex.md`, `status/Antigravity.md`, `status/vibe.md`, `status/deepseek.md`, `status/kimi.md` are unchanged (all last touched by a Prettier-formatting commit, not new content); their contents were already folded into WORKLOG in the prior cycle. Nothing new to mark done this pass.
+- **Verified components are still unwired**: `grep` for `MessageList`/`Composer`/`ChannelSidebar`/`Skeleton`/`EmojiPicker`/`UserAvatar` imports in `App.tsx` returns nothing — the Cycle 34 wiring queue (below, under Claude — in progress) is still the accurate state. `App.tsx` is now 2486 lines (grew, not shrank), confirming extraction hasn't happened yet despite the components existing since Cycle 32-33.
+- **Queue minimums checked and met:** Codex has 5 tasks queued (current + Codex-7/8/9/10), Antigravity has 4 queued (current + AG-10/11/12), P4 has 6 items, P0-P3 combined has well over 10 remaining items. No new tasks needed to satisfy minimums.
+- **No new PR opened this pass** — no unmerged work has accumulated on `main` since the merge; nothing to bundle yet.
+- **Outstanding operator decision still pending** (see Flags below, unchanged from last cycle): `OPERATOR_KEY` fail-open behavior when unset. Not acted on — awaiting explicit go-ahead, not a silent fix.
 
 ---
 
